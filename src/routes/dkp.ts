@@ -33,22 +33,27 @@ const querySchema = z.object({
 });
 
 /**
- * Loads the most recent scan + parses its `columns` JSON.
- * Returns null if no scan has been uploaded yet.
+ * Loads the most recent scan. Postgres JSONB columns come back already
+ * parsed by the driver — no JSON.parse needed.
  */
 async function loadCurrentScan() {
   const scan = await prisma.dkpScan.findFirst({
     orderBy: { uploadedAt: "desc" },
   });
   if (!scan) return null;
-  let columns: DkpColumn[] = [];
-  try {
-    columns = JSON.parse(scan.columns);
-  } catch {
-    columns = [];
-  }
+  const columns = (scan.columns as unknown as DkpColumn[]) ?? [];
   return { scan, columns };
 }
+
+/** Postgres-side row shape returned by either Prisma findMany or raw SQL. */
+type RawDkpRow = {
+  id: string;
+  rank: number;
+  governorId: string;
+  nickname: string;
+  alliance: string;
+  data: Record<string, unknown>;
+};
 
 router.get("/", async (req, res, next) => {
   try {
@@ -76,8 +81,8 @@ router.get("/", async (req, res, next) => {
     const where: Prisma.DkpRowWhereInput = { scanId: scan.id };
     if (q.search) {
       where.OR = [
-        { nickname: { contains: q.search } },
-        { governorId: { contains: q.search } },
+        { nickname: { contains: q.search, mode: "insensitive" } },
+        { governorId: { contains: q.search, mode: "insensitive" } },
       ];
     }
     if (q.alliance) where.alliance = q.alliance;
@@ -92,62 +97,71 @@ router.get("/", async (req, res, next) => {
       }),
     ]);
 
-    let rawRows: { id: string; rank: number; governorId: string; nickname: string; alliance: string; data: string }[];
+    let rawRows: RawDkpRow[];
 
     if (NATIVE_KEYS.has(sortBy)) {
-      rawRows = await prisma.dkpRow.findMany({
+      const found = await prisma.dkpRow.findMany({
         where,
         orderBy: { [sortBy]: sortOrder } as Prisma.DkpRowOrderByWithRelationInput,
         skip: (q.page - 1) * q.pageSize,
         take: q.pageSize,
       });
-    } else {
-      // JSON sort via raw SQL — sortBy is whitelisted by sortByCol check above.
-      // Cast to REAL for numeric columns; otherwise sort lexicographically.
-      const isNumeric =
-        sortByCol?.type === "number" || sortByCol?.type === "percent";
-      const orderExpr = isNumeric
-        ? `CAST(json_extract(data, '$."${sortBy.replace(/"/g, '""')}"') AS REAL)`
-        : `json_extract(data, '$."${sortBy.replace(/"/g, '""')}"')`;
-      const dir = sortOrder === "desc" ? "DESC" : "ASC";
-      const offset = (q.page - 1) * q.pageSize;
-
-      rawRows = await prisma.$queryRawUnsafe<typeof rawRows>(
-        `SELECT id, rank, governorId, nickname, alliance, data
-         FROM dkp_rows
-         WHERE scanId = ?
-           AND (? = '' OR nickname LIKE '%' || ? || '%' OR governorId LIKE '%' || ? || '%')
-           AND (? = '' OR alliance = ?)
-         ORDER BY ${orderExpr} ${dir} NULLS LAST
-         LIMIT ? OFFSET ?`,
-        scan.id,
-        q.search ?? "",
-        q.search ?? "",
-        q.search ?? "",
-        q.alliance ?? "",
-        q.alliance ?? "",
-        q.pageSize,
-        offset,
-      );
-    }
-
-    // flatten: hoist data fields onto the row object alongside native fields
-    const items = rawRows.map((r) => {
-      let parsed: Record<string, unknown> = {};
-      try {
-        parsed = JSON.parse(r.data);
-      } catch {
-        parsed = {};
-      }
-      return {
+      rawRows = found.map((r) => ({
         id: r.id,
         rank: r.rank,
         governorId: r.governorId,
         nickname: r.nickname,
         alliance: r.alliance,
-        ...parsed,
-      };
-    });
+        data: (r.data as Record<string, unknown>) ?? {},
+      }));
+    } else {
+      // JSON sort via raw SQL — sortBy is whitelisted by sortByCol check above.
+      // For numeric/percent: cast text to numeric. For string: lexical compare.
+      const isNumeric =
+        sortByCol?.type === "number" || sortByCol?.type === "percent";
+      const dir = sortOrder === "desc" ? "DESC" : "ASC";
+      // Postgres: data->>'key' returns text; ::numeric coerces; NULLS LAST keeps gaps at the bottom.
+      const orderExpr = isNumeric
+        ? `(("data"->>$5)::numeric)`
+        : `("data"->>$5)`;
+      const offset = (q.page - 1) * q.pageSize;
+
+      // Postgres parameter placeholders are positional ($1..$N).
+      // Order: scanId, search, alliance, useSearchFilter(0/1), sortKey, useAllianceFilter, limit, offset
+      const sql = `
+        SELECT id, rank, "governorId" as "governorId", nickname, alliance, data
+        FROM dkp_rows
+        WHERE "scanId" = $1
+          AND ($2::text = '' OR nickname ILIKE '%' || $2 || '%' OR "governorId" ILIKE '%' || $2 || '%')
+          AND ($3::text = '' OR alliance = $3)
+        ORDER BY ${orderExpr} ${dir} NULLS LAST, rank ASC
+        LIMIT $4 OFFSET $6
+      `;
+      // Note: $5 used inside orderExpr above for the json key
+      const found = await prisma.$queryRawUnsafe<RawDkpRow[]>(
+        sql,
+        scan.id,
+        q.search ?? "",
+        q.alliance ?? "",
+        q.pageSize,
+        sortBy,
+        offset,
+      );
+      rawRows = found.map((r) => ({
+        ...r,
+        data: (r.data as Record<string, unknown>) ?? {},
+      }));
+    }
+
+    // flatten: hoist data fields onto the row object alongside native fields
+    const items = rawRows.map((r) => ({
+      id: r.id,
+      rank: r.rank,
+      governorId: r.governorId,
+      nickname: r.nickname,
+      alliance: r.alliance,
+      ...r.data,
+    }));
 
     res.json({
       columns,
@@ -188,20 +202,18 @@ router.post(
       if (result.rows.length === 0)
         return res.status(400).json({ error: "no_rows" });
 
-      const columnsJson = JSON.stringify(result.columns);
       const filename = req.file.originalname;
 
-      // wipe existing scans (cascade → rows), then create new
       await prisma.$transaction(async (tx) => {
         await tx.dkpScan.deleteMany({});
         const scan = await tx.dkpScan.create({
           data: {
             filename,
-            columns: columnsJson,
+            // JSONB — pass the object directly; driver serialises it.
+            columns: result.columns as unknown as Prisma.InputJsonValue,
             rowCount: result.rows.length,
           },
         });
-        // chunk createMany to avoid SQLite parameter limit
         const CHUNK = 200;
         for (let i = 0; i < result.rows.length; i += CHUNK) {
           const slice = result.rows.slice(i, i + CHUNK);
@@ -212,7 +224,7 @@ router.post(
               governorId: r.governorId,
               nickname: r.nickname,
               alliance: r.alliance,
-              data: JSON.stringify(r.data),
+              data: r.data as unknown as Prisma.InputJsonValue,
             })),
           });
         }

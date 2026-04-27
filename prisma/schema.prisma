@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -45,10 +45,9 @@ model MediaItem {
 model DkpScan {
   id         String   @id @default(cuid())
   filename   String
-  /// JSON-encoded array of { key, label, type, order, sortable }.
-  /// SQLite doesn't have a native Json type in Prisma 5 — we ser/de it
-  /// at the application boundary.
-  columns    String
+  /// Array of { key, label, type, order, sortable, native }.
+  /// Postgres JSONB — efficient indexing + native JSON ops.
+  columns    Json
   rowCount   Int      @default(0)
   uploadedAt DateTime @default(now())
 
@@ -71,10 +70,9 @@ model DkpRow {
   nickname    String
   alliance    String
 
-  /// JSON-encoded { [columnLabel]: rawValue }. Numbers stored as strings
-  /// to survive BigInt safely. Sorting on these fields uses
-  /// json_extract() in raw SQL.
-  data        String
+  /// JSONB { [columnLabel]: rawValue }. Numbers stored as strings to survive
+  /// BigInt; sorting on these fields uses (data->>'key')::numeric in raw SQL.
+  data        Json
 
   @@index([scanId, rank])
   @@index([scanId, nickname])
