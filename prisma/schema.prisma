@@ -1,0 +1,84 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Migration requirements shown on the landing's Migration page.
+/// `iconKey` references a lucide-react icon name on the frontend.
+model MigrationRequirement {
+  id          String   @id @default(cuid())
+  title       String
+  description String
+  iconKey     String   @default("Crown")
+  order       Int      @default(0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("migration_requirements")
+}
+
+/// YouTube media items shown on the landing's Media page.
+/// `title` is auto-fetched from YouTube oEmbed when the URL is saved
+/// (admin can override it manually).
+model MediaItem {
+  id          String   @id @default(cuid())
+  url         String   @unique
+  title       String
+  thumbnail   String
+  videoId     String
+  order       Int      @default(0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("media_items")
+}
+
+/// A single DKP scan upload. Columns metadata + the rows it produced.
+/// Only one scan is "current" at a time — uploads atomically replace
+/// the entire collection.
+model DkpScan {
+  id         String   @id @default(cuid())
+  filename   String
+  /// JSON-encoded array of { key, label, type, order, sortable }.
+  /// SQLite doesn't have a native Json type in Prisma 5 — we ser/de it
+  /// at the application boundary.
+  columns    String
+  rowCount   Int      @default(0)
+  uploadedAt DateTime @default(now())
+
+  rows       DkpRow[]
+
+  @@map("dkp_scans")
+}
+
+/// A single governor row within a scan. Native fields (rank, governorId,
+/// nickname, alliance) are stored as columns for fast index-backed search
+/// and filtering. Every other field — including arbitrary ones we've never
+/// seen before — lives in `data` keyed by the original column label.
+model DkpRow {
+  id          String   @id @default(cuid())
+  scanId      String
+  scan        DkpScan  @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  rank        Int
+  governorId  String
+  nickname    String
+  alliance    String
+
+  /// JSON-encoded { [columnLabel]: rawValue }. Numbers stored as strings
+  /// to survive BigInt safely. Sorting on these fields uses
+  /// json_extract() in raw SQL.
+  data        String
+
+  @@index([scanId, rank])
+  @@index([scanId, nickname])
+  @@index([scanId, governorId])
+  @@index([scanId, alliance])
+  @@map("dkp_rows")
+}
