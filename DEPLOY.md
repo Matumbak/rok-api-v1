@@ -1,102 +1,98 @@
 # Free deploy walkthrough
 
-End-to-end: GitHub → Neon (Postgres) → Render (API) → Vercel (landing + admin).
-Everything below is on free tiers and doesn't require a credit card.
+End-to-end: GitHub → Neon (Postgres) → Vercel × 3 (api + landing + admin).
+Everything below is on free tiers and **does not require a credit card**.
 
 ## Prerequisites
 
-- GitHub account with three repos pushed:
-  - `rok-api` (this one)
-  - `rok-landing`
-  - `rok-admin`
+- GitHub account with three repos pushed: `rok-api`, `rok-landing`, `rok-admin`.
 - Browser. That's it.
 
 ## 1. Database — Neon
 
-1. Sign in at <https://neon.tech> with GitHub.
-2. **Create project** → pick a region close to your users (e.g. EU Central / Frankfurt).
-3. On the project dashboard, copy the **pooled** connection string under
-   *Connection Details*. It looks like:
+1. Sign in at <https://neon.tech> with GitHub. No CC.
+2. **Create project** → pick a region close to your users (Frankfurt for EU).
+3. On the dashboard, copy the **pooled** connection string under
+   *Connection Details*:
    ```
    postgresql://USER:PASS@ep-xyz-pooler.eu-central-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
    ```
-4. Save it — you'll paste this into Render in step 2.
+4. Save it somewhere — you'll paste it into Vercel in step 2.
 
 Free tier: 0.5 GB storage, 5 GB transfer/month, no idle timeout, no expiry.
 
-## 2. API — Render
+## 2. API — Vercel (project #1: `rok-api`)
 
-1. Sign in at <https://render.com> with GitHub.
-2. **New + → Blueprint** → connect your `rok-api` repo. Render reads
-   [`render.yaml`](./render.yaml) and proposes a single web service.
-   Confirm and create.
-3. After the service is created, open it → **Environment** and set:
-   - `DATABASE_URL` — the Neon connection string from step 1
-   - `CORS_ORIGINS` — leave empty for now; you'll fill it once Vercel gives
-     you the landing + admin URLs (step 4)
-   - `ADMIN_TOKEN` — Render auto-generates one. Open it once and copy it
-     somewhere safe; you'll paste it into the admin login.
-4. Trigger a manual redeploy after setting env vars. The boot sequence is:
+1. Sign in at <https://vercel.com> with GitHub. No CC for hobby.
+2. **Add New → Project** → pick `rok-api` repo.
+3. Framework preset: Next.js (auto-detected).
+4. **Build Command** — override the default with:
    ```
-   npm ci
-   npm run build                            # tsc → dist/
-   npx prisma db push --skip-generate       # creates tables on Neon
-   npx tsx prisma/seed.ts                   # idempotent — defaults for requirements/media
-   node dist/index.js                       # listens on $PORT
+   prisma generate && prisma db push --skip-generate && next build
    ```
-5. Hit `https://<your-service>.onrender.com/health` — should return
-   `{"status":"ok","uptime":...}`. Note the URL.
+   (`prisma db push` syncs the schema to Neon on every deploy — creates tables on first deploy, no-ops on subsequent ones.)
+5. **Environment Variables**:
+   - `DATABASE_URL` — the Neon pooled connection string from step 1
+   - `ADMIN_TOKEN` — any random string (32+ chars). Generate with `openssl rand -hex 32` or use a password manager. Save it — you'll paste it into the admin login.
+   - `CORS_ORIGINS` — leave empty for now; you'll fill it after step 4.
+6. **Deploy**. Vercel builds → Prisma syncs schema → app boots.
+7. Hit `https://<your-rok-api>.vercel.app/api/health` — should return `{"status":"ok",...}`. Note the URL.
 
-Free tier: web service sleeps after 15 min idle; cold start ≈ 30 s.
+## 3. Landing — Vercel (project #2: `rok-landing`)
 
-## 3. Landing — Vercel
-
-1. Sign in at <https://vercel.com> with GitHub.
-2. **Add New → Project** → pick your `rok-landing` repo.
-3. Vercel auto-detects Next.js. **Environment Variables**:
-   - `NEXT_PUBLIC_API_URL` = `https://<your-rok-api>.onrender.com`
-4. **Deploy**. Once it's live, copy the URL (e.g. `https://rok-landing-xxx.vercel.app`).
-
-## 4. Admin — Vercel
-
-1. **Add New → Project** → pick your `rok-admin` repo.
+1. **Add New → Project** → pick `rok-landing` repo.
 2. **Environment Variables**:
-   - `NEXT_PUBLIC_API_URL` = `https://<your-rok-api>.onrender.com`
+   - `NEXT_PUBLIC_API_URL` = `https://<your-rok-api>.vercel.app`
+3. **Deploy**. Once live, copy the URL (e.g. `https://rok-landing-xxx.vercel.app`).
+
+## 4. Admin — Vercel (project #3: `rok-admin`)
+
+1. **Add New → Project** → pick `rok-admin` repo.
+2. **Environment Variables**:
+   - `NEXT_PUBLIC_API_URL` = `https://<your-rok-api>.vercel.app`
    - `NEXT_PUBLIC_LANDING_URL` = `https://<your-rok-landing>.vercel.app`
 3. **Deploy**. Copy the URL.
 
-## 5. Wire CORS
+## 5. Wire CORS (back to api project)
 
-Back to Render → `rok-api` → **Environment** → set:
+Vercel project `rok-api` → **Settings → Environment Variables** → set:
 
 ```
 CORS_ORIGINS=https://rok-landing-xxx.vercel.app,https://rok-admin-xxx.vercel.app
 ```
 
-Trigger another redeploy (Render does this automatically on env changes).
+Trigger a redeploy of `rok-api` so the new env var takes effect (Settings → Deployments → ⋯ → Redeploy).
 
 ## 6. First login + first scan
 
 1. Open `https://<rok-admin>.vercel.app/login`.
-2. Paste the `ADMIN_TOKEN` from Render. You'll be redirected to `/requirements`.
+2. Paste the `ADMIN_TOKEN` from step 2. You'll be redirected to `/requirements`.
 3. Sanity check: edit a requirement, save, then visit `https://<rok-landing>.vercel.app/migration` — your edit should appear within 60 seconds (ISR revalidation).
-4. Go to `/dkp` in admin → drop your tracker's xlsx file. The leaderboard appears on the public landing immediately.
+4. Go to `/dkp` in admin → drop your tracker's `.xlsx` file. The leaderboard appears on the public landing immediately.
 
 ## Updates
 
-Push to `main` on any of the three repos → Render and Vercel auto-deploy.
-Schema changes on `rok-api`: `prisma db push` runs on every boot, so as
-long as your changes don't break existing data the next deploy syncs the
-DB. For destructive changes, run `prisma migrate dev` locally to generate
-a migration and rethink the strategy before pushing.
+Push to `main` on any of the three repos → Vercel auto-deploys.
+
+Schema changes on `rok-api`: `prisma db push` runs on every build, so any
+non-destructive change syncs automatically. For destructive changes, run
+`prisma migrate dev` locally to think through the data migration before
+pushing.
 
 ## Costs (April 2026)
 
-| Service                | Plan       | Limits relevant here                        |
-| ---------------------- | ---------- | ------------------------------------------- |
-| Neon Postgres          | Free       | 0.5 GB storage, 5 GB egress/mo              |
-| Render web service     | Free       | sleeps after 15 min idle, 100 GB egress/mo  |
-| Vercel landing + admin | Hobby      | 100 GB egress/mo each, unlimited static     |
+| Service                 | Plan       | Limits                                   |
+| ----------------------- | ---------- | ---------------------------------------- |
+| Neon Postgres           | Free       | 0.5 GB storage, 5 GB egress/mo           |
+| Vercel rok-api          | Hobby      | 100 GB egress/mo, 10s function timeout (30s on `/upload`) |
+| Vercel rok-landing      | Hobby      | 100 GB egress/mo, ISR included           |
+| Vercel rok-admin        | Hobby      | 100 GB egress/mo                         |
 
-Total: $0/mo until traffic exceeds the egress limits, which for a kingdom
-landing is essentially never.
+Total: **$0/mo**, no credit card required at any step.
+
+## Why not Render anymore?
+
+The earlier draft of this guide pointed at Render's free web service tier.
+As of 2025-2026 Render gates free tiers behind credit-card validation. By
+moving the API onto Next.js Route Handlers we host all three projects on
+Vercel hobby — no payment instrument anywhere.

@@ -1,0 +1,19 @@
+# Local Postgres for development. Run with `docker compose up -d`.
+# `.env` should then have:
+#   DATABASE_URL="postgresql://rokapi:rokapi@localhost:5433/rokapi"
+services:
+  pg:
+    image: postgres:16-alpine
+    container_name: rok-api-pg
+    restart: unless-stopped
+    ports:
+      - "5433:5432"   # 5433 to avoid clashing with any other local Postgres
+    environment:
+      POSTGRES_USER: rokapi
+      POSTGRES_PASSWORD: rokapi
+      POSTGRES_DB: rokapi
+    volumes:
+      - rokapi_pgdata:/var/lib/postgresql/data
+
+volumes:
+  rokapi_pgdata:

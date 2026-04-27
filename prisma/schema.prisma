@@ -7,6 +7,22 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// Kingdom stat cards shown above the requirements on the Migration page.
+/// `value` is free-text (e.g. "84.2B", "1,240", "12.6T") so the admin can
+/// format it any way they like. `iconKey` is a lucide-react icon name.
+model KingdomStat {
+  id        String   @id @default(cuid())
+  label     String
+  value     String
+  iconKey   String   @default("Trophy")
+  order     Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("kingdom_stats")
+}
+
 /// Migration requirements shown on the landing's Migration page.
 /// `iconKey` references a lucide-react icon name on the frontend.
 model MigrationRequirement {
