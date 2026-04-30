@@ -96,3 +96,109 @@ model DkpRow {
   @@index([scanId, alliance])
   @@map("dkp_rows")
 }
+
+/// A migration application submitted by a prospective governor through the
+/// landing's /migration/apply form. Screenshots are stored in Vercel Blob —
+/// `screenshots` holds an array of { url, label, size, contentType }. Blobs
+/// are auto-cleaned when an admin transitions the status (archived → now,
+/// rejected → +30d, approved → +90d). Pending applications keep their blobs.
+model MigrationApplication {
+  id              String    @id @default(cuid())
+
+  // Identity (always manual, required).
+  governorId      String
+  nickname        String
+  currentKingdom  String
+  currentAlliance String?
+  discordHandle   String
+
+  // Stats — free text so we don't reject odd formats ("84M" / "84,200,000").
+  // OCR auto-fills these on submit; admin can correct any of them.
+  power           String
+  killPoints      String
+  vipLevel        String
+
+  t1Kills           String?
+  t2Kills           String?
+  t3Kills           String?
+  t4Kills           String?
+  t5Kills           String?
+  deaths            String?
+  healed            String?
+  resourcesGathered String?
+
+  // Resources — the four storables shown on the in-game resources tab.
+  // Free-text strings preserve the user's chosen format ("3.6B" /
+  // "3,600,000,000"); the *N columns hold the parsed Float for sorting.
+  food              String?
+  wood              String?
+  stone             String?
+  gold              String?
+
+  // Speedups — five canonical RoK categories. Stored as Int minutes,
+  // matching how the in-game "Всего" / "Total" duration is summed.
+  // `speedupsMinutes` is the grand total (sum of the five) for sortability.
+  speedupsMinutes              Int?
+  speedupsUniversalMinutes     Int?
+  speedupsConstructionMinutes  Int?
+  speedupsResearchMinutes      Int?
+  speedupsTrainingMinutes      Int?
+  speedupsHealingMinutes       Int?
+  /// Object holding any extra speedup categories the parser didn't recognize
+  /// (event speedups, KvK speedups, etc.). Free-form by design.
+  speedupsBreakdown Json?
+
+  // Normalized numeric copies for sorting / filtering. Float64 holds RoK
+  // values comfortably (max ~10^13). Computed at write time from the
+  // matching string field via lib/parse-rok-number.ts.
+  powerN            Float?
+  killPointsN       Float?
+  t1KillsN          Float?
+  t2KillsN          Float?
+  t3KillsN          Float?
+  t4KillsN          Float?
+  t5KillsN          Float?
+  deathsN           Float?
+  healedN           Float?
+  resourcesGatheredN Float?
+  foodN             Float?
+  woodN             Float?
+  stoneN            Float?
+  goldN             Float?
+  previousKvkDkpN   Float?
+
+  /// Raw OCR text concatenated across all uploaded screenshots — kept so
+  /// admin can re-parse / debug if a field looks wrong.
+  ocrRawText        String?
+
+  /// Number of marches the applicant can field at once. Manual input —
+  /// officers eyeball commanders / equipment from the screenshots.
+  marches           Int?
+  /// Object: { legendary: "5", epic: "12", ... } — admin can fill from screens.
+  equipmentSummary  Json?
+  previousKvkDkp    String?
+
+  // Workflow / preferences.
+  activityHours   String?
+  timezone        String?
+  hasScrolls      Boolean   @default(false)
+  reason          String?
+
+  /// Array of { url, pathname, category, label, size, contentType }.
+  screenshots     Json      @default("[]")
+
+  status          String    @default("pending")
+  adminNotes      String?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  reviewedAt      DateTime?
+  /// Set when status transitions away from `pending`. Cleanup job nukes
+  /// the screenshots once this is in the past; the row itself stays so
+  /// the parsed numeric data remains queryable.
+  blobCleanupAt   DateTime?
+
+  @@index([status, createdAt])
+  @@index([governorId])
+  @@map("migration_applications")
+}
