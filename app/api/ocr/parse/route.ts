@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { withCors } from "@/lib/cors";
-import { extractRokScreen } from "@/lib/gemini";
+import { extractRokScreen } from "@/lib/ocr";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
