@@ -1,42 +1,87 @@
 /**
- * OCR for RoK screenshots via OpenRouter.
+ * OCR for RoK screenshots — provider cascade.
  *
- * Why not direct Gemini: Google's free-tier quota is geo-restricted —
- * many regions get `limit: 0` even on a fresh AI Studio key. OpenRouter
- * proxies dozens of models behind one OpenAI-compatible API and ships
- * a few of them as `:free` variants without the same regional gates.
+ *   Groq        — primary. Genuinely free tier (no CC, no deposit),
+ *                 ~14 400 req/day, fastest inference (LPU chips). Used
+ *                 first when GROQ_API_KEY is set.
+ *   OpenRouter  — fallback. :free models require a paid history /
+ *                 deposit on new accounts (returns 404 otherwise), but
+ *                 once unlocked it offers a wide model catalog.
  *
- * Default model is `google/gemini-2.0-flash-exp:free` (same Gemini Flash
- * we'd use direct, just routed). If it fails (quota / 5xx), we cascade
- * to Llama 3.2 Vision and Mistral Pixtral free fallbacks. Any of them
- * is dramatically more accurate than Tesseract on the engraved RoK font.
+ * Both APIs are OpenAI-compatible Chat-Completions, so the request
+ * payload is identical bar base URL + bearer token + model name.
+ * Either provider is individually optional — the cascade just skips a
+ * section when its key isn't set.
  */
 
 import { z } from "zod";
 
-const API_KEY = process.env.OPENROUTER_API_KEY;
-const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
+const GROQ_KEY = process.env.GROQ_API_KEY;
+const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
 
-/**
- * Try-list. We march down it on each call until one model returns a
- * usable JSON. Strings ending in `:free` are zero-cost on OpenRouter.
- * Override with OPENROUTER_OCR_MODELS=model1,model2 if needed.
- */
-/**
- * Current free vision models on OpenRouter (verified late 2025). The
- * `:free` suffix scopes them to the zero-cost slot; if a model gets
- * deprecated OpenRouter returns 404 and the cascade tries the next.
- */
-const DEFAULT_MODELS = [
+const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
+const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
+
+/** Vision-capable models on Groq's free tier (late 2025). */
+const DEFAULT_GROQ_MODELS = [
+  "meta-llama/llama-4-scout-17b-16e-instruct",
+  "meta-llama/llama-4-maverick-17b-128e-instruct",
+];
+
+/** Free vision models on OpenRouter — used only when Groq is unavailable
+ *  or rate-limited. Each entry can hit 404 if OR rotates models out;
+ *  cascade keeps marching to the next. */
+const DEFAULT_OPENROUTER_MODELS = [
   "meta-llama/llama-3.2-11b-vision-instruct:free",
   "qwen/qwen-2.5-vl-72b-instruct:free",
   "mistralai/mistral-small-3.2-24b-instruct:free",
 ];
 
-function modelList(): string[] {
-  const env = process.env.OPENROUTER_OCR_MODELS?.trim();
-  if (env) return env.split(",").map((s) => s.trim()).filter(Boolean);
-  return DEFAULT_MODELS;
+interface ProviderTarget {
+  label: string;
+  endpoint: string;
+  apiKey: string;
+  model: string;
+  /** OpenRouter wants Referer + Title for analytics + free-tier eligibility. */
+  extraHeaders?: Record<string, string>;
+}
+
+function envList(name: string, fallback: string[]): string[] {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+function buildTargets(): ProviderTarget[] {
+  const targets: ProviderTarget[] = [];
+  if (GROQ_KEY) {
+    for (const m of envList("GROQ_OCR_MODELS", DEFAULT_GROQ_MODELS)) {
+      targets.push({
+        label: `groq/${m}`,
+        endpoint: GROQ_ENDPOINT,
+        apiKey: GROQ_KEY,
+        model: m,
+      });
+    }
+  }
+  if (OPENROUTER_KEY) {
+    for (const m of envList(
+      "OPENROUTER_OCR_MODELS",
+      DEFAULT_OPENROUTER_MODELS,
+    )) {
+      targets.push({
+        label: `openrouter/${m}`,
+        endpoint: OPENROUTER_ENDPOINT,
+        apiKey: OPENROUTER_KEY,
+        model: m,
+        extraHeaders: {
+          "HTTP-Referer": "https://huns-4028.vercel.app",
+          "X-Title": "RoK 4028 migration form",
+        },
+      });
+    }
+  }
+  return targets;
 }
 
 export interface ParsedRokScreen {
@@ -142,42 +187,40 @@ function stripCodeFences(s: string): string {
     .trim();
 }
 
-interface OpenRouterContent {
+interface ChatContent {
   type: "text" | "image_url";
   text?: string;
   image_url?: { url: string };
 }
 
-interface OpenRouterChoice {
+interface ChatChoice {
   message: { content: string };
   finish_reason: string;
 }
 
-interface OpenRouterResponse {
-  choices: OpenRouterChoice[];
-  error?: { message: string; code: number };
+interface ChatResponse {
+  choices: ChatChoice[];
+  error?: { message: string; code?: number };
 }
 
-async function callOpenRouter(args: {
-  model: string;
-  imageDataUrl: string;
-}): Promise<ParsedRokScreen> {
-  const userContent: OpenRouterContent[] = [
+async function callTarget(
+  target: ProviderTarget,
+  imageDataUrl: string,
+): Promise<ParsedRokScreen> {
+  const userContent: ChatContent[] = [
     { type: "text", text: "Extract the RoK fields from this screenshot." },
-    { type: "image_url", image_url: { url: args.imageDataUrl } },
+    { type: "image_url", image_url: { url: imageDataUrl } },
   ];
 
-  const res = await fetch(ENDPOINT, {
+  const res = await fetch(target.endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${API_KEY}`,
-      // OpenRouter recommends these for analytics + free-tier eligibility.
-      "HTTP-Referer": "https://huns-4028.vercel.app",
-      "X-Title": "RoK 4028 migration form",
+      Authorization: `Bearer ${target.apiKey}`,
+      ...(target.extraHeaders ?? {}),
     },
     body: JSON.stringify({
-      model: args.model,
+      model: target.model,
       response_format: { type: "json_object" },
       temperature: 0,
       messages: [
@@ -189,56 +232,54 @@ async function callOpenRouter(args: {
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`openrouter_${res.status}: ${text.slice(0, 300)}`);
+    throw new Error(`upstream_${res.status}: ${text.slice(0, 300)}`);
   }
 
-  const body = (await res.json()) as OpenRouterResponse;
+  const body = (await res.json()) as ChatResponse;
   if (body.error) {
-    throw new Error(`openrouter_error: ${body.error.message}`);
+    throw new Error(`upstream_error: ${body.error.message}`);
   }
   const raw = body.choices?.[0]?.message?.content;
-  if (!raw) throw new Error("openrouter_empty_response");
+  if (!raw) throw new Error("empty_response");
 
   const cleaned = stripCodeFences(raw);
   let json: unknown;
   try {
     json = JSON.parse(cleaned);
   } catch {
-    throw new Error(`openrouter_non_json: ${cleaned.slice(0, 200)}`);
+    throw new Error(`non_json: ${cleaned.slice(0, 200)}`);
   }
 
-  // Coerce: missing keys → null. Validates with zod for type safety.
   const filled = { ...emptyResult(), ...(json as object) };
   return responseSchema.parse(filled);
 }
 
 /**
  * Run the universal RoK extractor over a single image. Cascades through
- * the model list — first model that returns valid JSON wins.
+ * the configured providers (Groq → OpenRouter) — first one that returns
+ * a usable JSON wins. Retries on 4xx (model rotation), 5xx, quota and
+ * transient JSON-parse hiccups; fails fast on auth / our own bugs.
  */
 export async function extractRokScreen(args: {
   imageData: Buffer;
   mimeType: string;
 }): Promise<ParsedRokScreen> {
-  if (!API_KEY) {
-    throw new Error("OPENROUTER_API_KEY is not set");
+  const targets = buildTargets();
+  if (targets.length === 0) {
+    throw new Error("no_ocr_provider_configured");
   }
   const dataUrl = `data:${args.mimeType};base64,${args.imageData.toString(
     "base64",
   )}`;
   const errors: string[] = [];
-  for (const model of modelList()) {
+  for (const target of targets) {
     try {
-      return await callOpenRouter({ model, imageDataUrl: dataUrl });
+      return await callTarget(target, dataUrl);
     } catch (err) {
       const msg = (err as Error).message ?? "unknown";
-      errors.push(`${model}: ${msg.slice(0, 200)}`);
-      // Retry on: model deprecated/unknown (404 / no endpoints), rate
-      // limit (429), upstream 5xx, transient parse / empty response, or
-      // quota exhausted. Anything else (auth / 400 / our own bug) fails
-      // fast — no point thrashing the cascade.
+      errors.push(`${target.label}: ${msg.slice(0, 200)}`);
       const retryable =
-        /openrouter_404|openrouter_429|openrouter_5\d\d|no\s*endpoints|quota|timeout|empty_response|non_json/i.test(
+        /upstream_4\d\d|upstream_5\d\d|no\s*endpoints|quota|timeout|empty_response|non_json|rate.?limit/i.test(
           msg,
         );
       if (!retryable) throw err;
