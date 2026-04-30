@@ -36,10 +36,23 @@ export const submitSchema = z.object({
   nickname: z.string().min(1).max(60),
   currentKingdom: z.string().min(1).max(20),
   currentAlliance: z.string().max(40).optional().nullable(),
+  civilization: z.string().max(40).optional().nullable(),
   power: z.string().max(40),
   killPoints: z.string().max(40),
   vipLevel: z.string().max(10),
   discordHandle: z.string().min(1).max(60),
+
+  // Power breakdown + combat stats (all OCR-fillable, optional).
+  constructionPower: z.string().max(40).optional().nullable(),
+  technologyPower: z.string().max(40).optional().nullable(),
+  troopPower: z.string().max(40).optional().nullable(),
+  commanderPower: z.string().max(40).optional().nullable(),
+  maxPower: z.string().max(40).optional().nullable(),
+  wins: z.string().max(40).optional().nullable(),
+  losses: z.string().max(40).optional().nullable(),
+  arkOsirisWins: z.string().max(40).optional().nullable(),
+  valorPoints: z.string().max(40).optional().nullable(),
+  maxValorPoints: z.string().max(40).optional().nullable(),
 
   t1Kills: z.string().max(40).optional().nullable(),
   t2Kills: z.string().max(40).optional().nullable(),
@@ -102,6 +115,16 @@ export const NORMALIZED_FIELD_MAP: Record<string, string> = {
   stone: "stoneN",
   gold: "goldN",
   previousKvkDkp: "previousKvkDkpN",
+  constructionPower: "constructionPowerN",
+  technologyPower: "technologyPowerN",
+  troopPower: "troopPowerN",
+  commanderPower: "commanderPowerN",
+  maxPower: "maxPowerN",
+  wins: "winsN",
+  losses: "lossesN",
+  arkOsirisWins: "arkOsirisWinsN",
+  valorPoints: "valorPointsN",
+  maxValorPoints: "maxValorPointsN",
 };
 
 /**

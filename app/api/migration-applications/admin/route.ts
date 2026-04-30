@@ -29,6 +29,16 @@ const SORT_ALIAS: Record<string, string> = {
   stone: "stoneN",
   gold: "goldN",
   previousKvkDkp: "previousKvkDkpN",
+  constructionPower: "constructionPowerN",
+  technologyPower: "technologyPowerN",
+  troopPower: "troopPowerN",
+  commanderPower: "commanderPowerN",
+  maxPower: "maxPowerN",
+  wins: "winsN",
+  losses: "lossesN",
+  arkOsirisWins: "arkOsirisWinsN",
+  valorPoints: "valorPointsN",
+  maxValorPoints: "maxValorPointsN",
 };
 
 const SORTABLE_COLUMNS = new Set([
@@ -129,6 +139,38 @@ export async function GET(request: Request) {
     }
     if (sp.get("hasScrolls") === "true") where.hasScrolls = true;
 
+    // Marches Int range — separate from the *N Float aliases.
+    const marchesMin = sp.get("marchesMin");
+    const marchesMax = sp.get("marchesMax");
+    if (marchesMin != null || marchesMax != null) {
+      const range: Prisma.IntNullableFilter = {};
+      if (marchesMin != null) {
+        const n = Number.parseInt(marchesMin, 10);
+        if (Number.isFinite(n)) range.gte = n;
+      }
+      if (marchesMax != null) {
+        const n = Number.parseInt(marchesMax, 10);
+        if (Number.isFinite(n)) range.lte = n;
+      }
+      if (range.gte != null || range.lte != null) where.marches = range;
+    }
+
+    // Submitted-on date range — ISO date strings.
+    const since = sp.get("since");
+    const until = sp.get("until");
+    if (since || until) {
+      const dr: Prisma.DateTimeFilter = {};
+      if (since) {
+        const d = new Date(since);
+        if (!Number.isNaN(d.getTime())) dr.gte = d;
+      }
+      if (until) {
+        const d = new Date(until);
+        if (!Number.isNaN(d.getTime())) dr.lte = d;
+      }
+      if (dr.gte != null || dr.lte != null) where.createdAt = dr;
+    }
+
     const [total, items, statusCounts] = await Promise.all([
       prisma.migrationApplication.count({ where }),
       prisma.migrationApplication.findMany({
@@ -166,6 +208,18 @@ export async function GET(request: Request) {
           stoneN: true,
           goldN: true,
           previousKvkDkpN: true,
+          civilization: true,
+          marches: true,
+          constructionPowerN: true,
+          technologyPowerN: true,
+          troopPowerN: true,
+          commanderPowerN: true,
+          maxPowerN: true,
+          winsN: true,
+          lossesN: true,
+          arkOsirisWinsN: true,
+          valorPointsN: true,
+          maxValorPointsN: true,
           speedupsMinutes: true,
         },
       }),

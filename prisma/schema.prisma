@@ -118,6 +118,25 @@ model MigrationApplication {
   killPoints      String
   vipLevel        String
 
+  // Power breakdown — sourced from "Подробнее → Войска → Мощь" tab. Helps
+  // admin spot lopsided builds (e.g. heavy builder vs combat-oriented).
+  constructionPower String?
+  technologyPower   String?
+  troopPower        String?
+  commanderPower    String?
+  /// Historical maximum power achieved by the governor.
+  maxPower          String?
+
+  // Combat statistics from the same details panel.
+  wins              String?
+  losses            String?
+  /// Ark of Osiris wins — proxy for KvK / coordinated PvP experience.
+  arkOsirisWins     String?
+  /// Current KvK valor points (Очки доблести).
+  valorPoints       String?
+  /// Lifetime maximum valor points (Макс. кол-во очк. доблести).
+  maxValorPoints    String?
+
   t1Kills           String?
   t2Kills           String?
   t3Kills           String?
@@ -166,6 +185,16 @@ model MigrationApplication {
   stoneN            Float?
   goldN             Float?
   previousKvkDkpN   Float?
+  constructionPowerN Float?
+  technologyPowerN  Float?
+  troopPowerN       Float?
+  commanderPowerN   Float?
+  maxPowerN         Float?
+  winsN             Float?
+  lossesN           Float?
+  arkOsirisWinsN    Float?
+  valorPointsN      Float?
+  maxValorPointsN   Float?
 
   /// Raw OCR text concatenated across all uploaded screenshots — kept so
   /// admin can re-parse / debug if a field looks wrong.
