@@ -22,9 +22,14 @@ const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
  * usable JSON. Strings ending in `:free` are zero-cost on OpenRouter.
  * Override with OPENROUTER_OCR_MODELS=model1,model2 if needed.
  */
+/**
+ * Current free vision models on OpenRouter (verified late 2025). The
+ * `:free` suffix scopes them to the zero-cost slot; if a model gets
+ * deprecated OpenRouter returns 404 and the cascade tries the next.
+ */
 const DEFAULT_MODELS = [
-  "google/gemini-2.0-flash-exp:free",
   "meta-llama/llama-3.2-11b-vision-instruct:free",
+  "qwen/qwen-2.5-vl-72b-instruct:free",
   "mistralai/mistral-small-3.2-24b-instruct:free",
 ];
 
@@ -227,14 +232,16 @@ export async function extractRokScreen(args: {
       return await callOpenRouter({ model, imageDataUrl: dataUrl });
     } catch (err) {
       const msg = (err as Error).message ?? "unknown";
-      errors.push(`${model}: ${msg}`);
-      // Only retry on quota / 5xx — for hard parse / auth errors, fail fast.
-      if (
-        !/429|503|502|timeout|empty_response|non_json/i.test(msg) &&
-        !/quota/i.test(msg)
-      ) {
-        throw err;
-      }
+      errors.push(`${model}: ${msg.slice(0, 200)}`);
+      // Retry on: model deprecated/unknown (404 / no endpoints), rate
+      // limit (429), upstream 5xx, transient parse / empty response, or
+      // quota exhausted. Anything else (auth / 400 / our own bug) fails
+      // fast — no point thrashing the cascade.
+      const retryable =
+        /openrouter_404|openrouter_429|openrouter_5\d\d|no\s*endpoints|quota|timeout|empty_response|non_json/i.test(
+          msg,
+        );
+      if (!retryable) throw err;
     }
   }
   throw new Error(`all_ocr_models_failed: ${errors.join(" | ")}`);
