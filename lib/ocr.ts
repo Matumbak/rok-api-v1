@@ -85,6 +85,8 @@ function buildTargets(): ProviderTarget[] {
 }
 
 export interface ParsedRokScreen {
+  governorId: string | null;
+  nickname: string | null;
   power: string | null;
   killPoints: string | null;
   vipLevel: string | null;
@@ -107,6 +109,8 @@ export interface ParsedRokScreen {
 }
 
 const PARSED_KEYS = [
+  "governorId",
+  "nickname",
   "power",
   "killPoints",
   "vipLevel",
@@ -151,43 +155,60 @@ const responseSchema = z.object(
 );
 
 const SYSTEM_PROMPT = `You are an OCR for Rise of Kingdoms (RoK) governor screenshots.
-The image shows a single screen from the in-game UI in Russian or English.
-Identify which screen this is and extract only the fields visible on it;
-every other field MUST be null.
+The image shows ONE primary screen. Identify which screen it is, then
+extract ONLY the fields owned by that screen. Every other field MUST be
+null — even if a value happens to be partially visible behind a popup
+overlay.
 
-Field guide:
-- power: governor's current "Мощь" / "Power" — raw integer, no abbreviations.
-- killPoints: total "Очки убийств" / "Kill Points" — raw integer.
-- vipLevel: VIP level number if shown.
-- t1Kills..t5Kills: counts in the "Данные по убийствам" / "Kill Data" popup
-  (LEFT column "Убийства" / "Kills"), per tier.
-- deaths: "Мертв" / "Dead" troops count from the "Подробнее → Войска" tab.
-- maxValorPoints: "Макс. кол-во очк. доблести" / "Max Valor" lifetime value
-  from the profile screen — NOT the current valor.
-- food, wood, stone, gold: take the FIRST column "От предметов" / "From items"
-  on the resources tab — NOT the rightmost "Всего" / "Total" column. These
-  are the resources the governor can carry during migration.
-- speedupsConstruction, Research, Training, Healing, Universal: durations
-  from the "Ускорения" / "Speedups" tab. Format as "Xd Yh Zm" (English
-  abbreviations, omit zero units, e.g. "63d 12h 20m" or "5h"). Universal is
-  the row labelled simply "Ускорение" / "Speedup" with no qualifier.
+Screen routing — fill ONLY the listed fields per screen:
 
-Number rules (apply to every numeric field):
-- ALWAYS return raw integers, no abbreviations: "84M" → "84000000",
-  "1.2B" → "1200000000", "330.7K" → "330700".
-- Strip thousand separators (spaces / commas / dots).
-- Cyrillic suffix letters (К/М/Б/В/Т) and Latin (K/M/B/T) both denote
-  thousand/million/billion/trillion respectively.
+  1. PROFILE ("Профиль правителя" / "Governor Profile" header):
+       governorId, nickname, power, killPoints, maxValorPoints,
+       vipLevel
+     Everything else → null.
 
-If a field isn't visible on this screen, return null for it. Never invent
-values. Never abbreviate.
+  2. KILL DATA POPUP ("Данные по убийствам" / "Kill Data" header):
+       t1Kills, t2Kills, t3Kills, t4Kills, t5Kills
+     ⚠ The profile screen is dimmed underneath this popup — DO NOT
+     extract power / killPoints / governorId / nickname even if you
+     can read them. Those fields go null on this screen.
 
-Respond with ONLY a JSON object that has every one of these keys present:
-power, killPoints, vipLevel, t1Kills, t2Kills, t3Kills, t4Kills, t5Kills,
-deaths, maxValorPoints, food, wood, stone, gold, speedupsConstruction,
-speedupsResearch, speedupsTraining, speedupsHealing, speedupsUniversal.
-Use null for any key not visible on the screen. No commentary, no
-markdown code fences — just the raw JSON.`;
+  3. DETAILS TAB ("Подробнее" / "Details" header, "Войска" tab):
+       deaths
+     Other power-breakdown / wins / losses lines → null.
+
+  4. RESOURCES TAB ("Ваши ресурсы и ускорения" header, "Ресурсы" tab):
+       food, wood, stone, gold
+     Take the FIRST column "От предметов" / "From items" — NOT the
+     rightmost "Всего" / "Total" column.
+
+  5. SPEEDUPS TAB ("Ваши ресурсы и ускорения" header, "Ускорения" tab):
+       speedupsConstruction, speedupsResearch, speedupsTraining,
+       speedupsHealing, speedupsUniversal
+     Universal is the row labelled simply "Ускорение" / "Speedup".
+
+  6. ANY OTHER SCREEN → all fields null.
+
+Field guide (formats):
+- governorId: numeric ID following "Правитель" / "Governor" — usually
+  shown as "(ID: 187562040)". Return just the digits: "187562040".
+- nickname: governor's display name on the profile screen. Strip
+  decorative prefix glyphs (⚔ ◇ ✿ etc): "⚔Matumba" → "Matumba".
+- power, killPoints, maxValorPoints, t1Kills..t5Kills, deaths,
+  food, wood, stone, gold: ALWAYS raw integers as STRINGS, no
+  abbreviations: "84M" → "84000000", "1.2B" → "1200000000",
+  "330.7K" → "330700". Strip all thousand separators.
+- Cyrillic suffix letters (К/М/Б/В/Т) and Latin (K/M/B/T) denote
+  thousand / million / billion / trillion respectively.
+- vipLevel: a small integer as string ("14").
+- speedups: duration string in English short form, omit zero units:
+  "63d 12h 20m", "5h", "20m". Universal can be "340d 18h 56m".
+
+Output requirements:
+- Respond with EXACTLY ONE JSON object.
+- Every field MUST be present as a key. Missing → null, not absent.
+- All numeric fields are strings, never JSON numbers.
+- No commentary, no markdown code fences. Just the raw JSON.`;
 
 function emptyResult(): ParsedRokScreen {
   return Object.fromEntries(
