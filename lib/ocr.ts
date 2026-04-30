@@ -128,10 +128,26 @@ const PARSED_KEYS = [
   "speedupsUniversal",
 ] as const;
 
+/**
+ * Per-field shape: any model is allowed to return null OR a primitive
+ * we can coerce to string. Llama 4 in particular tends to emit numbers
+ * for numeric fields even when prompted for strings — `preprocess`
+ * lets us salvage those without bouncing the whole response.
+ */
+const fieldSchema = z.preprocess((v) => {
+  if (v == null) return null;
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  // Anything weird (object / array) → null, model can be re-prompted
+  // by the cascade if all providers misbehave.
+  return null;
+}, z.string().nullable());
+
 const responseSchema = z.object(
-  Object.fromEntries(
-    PARSED_KEYS.map((k) => [k, z.string().nullable()]),
-  ) as Record<(typeof PARSED_KEYS)[number], z.ZodNullable<z.ZodString>>,
+  Object.fromEntries(PARSED_KEYS.map((k) => [k, fieldSchema])) as Record<
+    (typeof PARSED_KEYS)[number],
+    typeof fieldSchema
+  >,
 );
 
 const SYSTEM_PROMPT = `You are an OCR for Rise of Kingdoms (RoK) governor screenshots.
@@ -278,8 +294,12 @@ export async function extractRokScreen(args: {
     } catch (err) {
       const msg = (err as Error).message ?? "unknown";
       errors.push(`${target.label}: ${msg.slice(0, 200)}`);
+      // Zod errors mean the model returned an unexpected shape — try
+      // the next provider rather than bouncing the whole request.
+      const isZodError = err instanceof z.ZodError;
       const retryable =
-        /upstream_4\d\d|upstream_5\d\d|no\s*endpoints|quota|timeout|empty_response|non_json|rate.?limit/i.test(
+        isZodError ||
+        /upstream_4\d\d|upstream_5\d\d|no\s*endpoints|quota|timeout|empty_response|non_json|rate.?limit|invalid.?input/i.test(
           msg,
         );
       if (!retryable) throw err;
