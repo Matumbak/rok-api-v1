@@ -3,23 +3,29 @@
  *
  * Stage-aware. RoK has two distinct game phases with ~10× different
  * KP / power / deaths magnitudes:
- *   - Lost Kingdom (LK), KvK 1–4 — first ~6 months of a kingdom.
+ *   - Lost Kingdom (LK), KvK 1–4 — first ~6–12 months of a kingdom.
  *     Mostly T4 troops, T5 unlocks at KvK4. No Hall of Heroes.
  *   - Season of Conquest (SoC) — post-LK seasons (Pass of Change,
  *     Heroic Anthem, etc). Heavily T5 (and T6 in newest), Hall of
  *     Heroes returns ~50% of dead troops.
  *
- * Pivots are picked per-applicant via `scoringProfile`. Default for
- * kingdom 4028 (currently in KvK1) is `lost-kingdom` — see Obsidian
- * `rok/research/rok-account-scoring-2026-05.md` for the research.
+ * Profile is auto-inferred from account age (≥12mo → SoC) unless an
+ * explicit override is set on the application.
  *
- * Tags are derived independently of the score — they describe the
- * applicant's profile (veteran / fighter / spender / red-flag) rather
- * than rank them. Multiple tags can apply at once.
+ * Curve: piecewise-linear with 4 anchors per stat (p50/p80/p95/p99).
+ * Replaces the old log10 curve which saturated mid-whales at 95+ and
+ * left no headroom for genuine top-1% accounts. Anchors are calibrated
+ * against marketplace listings (Eldorado, U7Buy, FunPay, Zeusx),
+ * top-kingdom rankings (riseofstats, rokboard), and Devish19-class
+ * top-1% references — see the research note in
+ * `obsidian/rok/research/rok-account-scoring-2026-05.md`.
  *
- * The model stays additive + transparent: caller can read the
- * breakdown and the sanity-penalty table to explain any score back to
- * an officer or applicant.
+ * Calibration targets:
+ *   p50 (median active player) → 40 pts of the stat's cap (~50 total)
+ *   p80 (mid-whale 12-24mo)   → 70 pts (~75 total)
+ *   p95 (top whale)            → 90 pts (~88 total)
+ *   p99 (genuine top-1%)       → 96 pts (~94 total)
+ *   above p99                  → asymptote to 100 (~96 total)
  */
 
 export type SpendingTier =
@@ -46,37 +52,14 @@ export const SCORING_PROFILES: ScoringProfile[] = [
   "season-of-conquest",
 ];
 
-/**
- * Fallback profile when neither an explicit override nor a usable
- * `accountBornAt` is available. The actual profile is normally
- * inferred from account age — see `inferProfile()`. This constant is
- * the last-resort default for legacy applications without a Scout
- * verification.
- */
 export const DEFAULT_PROFILE: ScoringProfile = "lost-kingdom";
 
-/**
- * Account age threshold (months) above which an applicant is assumed
- * to have participated in Season of Conquest. Derived from the
- * standard kingdom timeline: KvK1 starts ~day 85–105, each LK season
- * lasts 50 days, KvK4 ends around month 13–15, then SoC. An account
- * older than 12 months has almost certainly been through at least
- * KvK4, often into early SoC chapters.
- *
- * Sources: rok.guide, riseofkingdomsguides.com, RoK Wiki Lost Kingdom
- * Chronicles. See `rok/research/rok-account-scoring-2026-05.md` for
- * the full timeline breakdown.
- */
+/** Account age threshold (months) — see Obsidian research note for the
+ *  KvK timeline derivation. KvK1 starts ~day 85-105, each LK season is
+ *  50 days, KvK4 ends month 13-15, then SoC. ≥12mo accounts have
+ *  almost certainly seen SoC. */
 export const SOC_ACCOUNT_AGE_THRESHOLD_MONTHS = 12;
 
-/**
- * Pick a scoring profile based on account age. Older account = more
- * likely to have SoC stats; younger = LK-only. Caller can override
- * with explicit `scoringProfile` on the input — admin can flip it
- * per-applicant via PATCH if the inference is wrong (e.g. a "restart
- * project" applicant whose Scout date is fresh but who claims SoC
- * experience from a prior account).
- */
 export function inferProfile(accountBornAt: Date | null): ScoringProfile {
   if (!accountBornAt) return DEFAULT_PROFILE;
   const months = ageMonthsFromDate(accountBornAt);
@@ -85,61 +68,74 @@ export function inferProfile(accountBornAt: Date | null): ScoringProfile {
     : "lost-kingdom";
 }
 
+/** Anchor set for piecewise-linear scoring. value at p50→0.40,
+ *  p80→0.70, p95→0.90, p99→0.96, asymptote 1.0 above 1.5×p99. */
+interface PiecewiseAnchors {
+  p50: number;
+  p80: number;
+  p95: number;
+  p99: number;
+}
+
 interface ProfilePivots {
+  power: PiecewiseAnchors;
+  killPoints: PiecewiseAnchors;
+  deaths: PiecewiseAnchors;
+  valor: PiecewiseAnchors;
+  t5Kills: PiecewiseAnchors;
+  prevKvkDkp: PiecewiseAnchors;
   agePivotMonths: number;
   vipPivot: number;
-  powerPivot: number;
-  killPointsPivot: number;
-  deathsPivot: number;
-  valorPivot: number;
-  /** Absolute T5 kills pivot — full credit at pivot. Using count, not
-   *  ratio, to prevent the loophole where someone with 50k T4 + 50k T5
-   *  gets max t5Score on a 100% T5 ratio. */
-  t5KillsPivot: number;
-  prevKvkDkpPivot: number;
-  /** "Variant A/B" split for last-KvK DKP recompute. */
   prevKvkDkpWeights: { t4: number; t5: number; deaths: number };
-  /** How harshly farm-only applicants are penalized in this stage. */
   farmOnlyPenalty: number;
 }
 
 const PROFILES: Record<ScoringProfile, ProfilePivots> = {
+  // Lost Kingdom — younger kingdoms, T4-dominant, lower magnitudes.
+  // Anchors derived from typical KvK1-4 community benchmarks.
   "lost-kingdom": {
-    agePivotMonths: 18,
+    power:      { p50: 25_000_000,  p80: 60_000_000,  p95: 100_000_000, p99: 150_000_000 },
+    killPoints: { p50: 50_000_000,  p80: 200_000_000, p95: 500_000_000, p99: 1_200_000_000 },
+    deaths:     { p50: 700_000,     p80: 2_000_000,   p95: 4_500_000,   p99: 8_000_000 },
+    valor:      { p50: 800_000,     p80: 2_500_000,   p95: 5_000_000,   p99: 8_000_000 },
+    t5Kills:    { p50: 100_000,     p80: 800_000,     p95: 2_000_000,   p99: 4_000_000 },
+    prevKvkDkp: { p50: 20_000_000,  p80: 80_000_000,  p95: 200_000_000, p99: 400_000_000 },
+    agePivotMonths: 12,
     vipPivot: 12,
-    powerPivot: 60_000_000,
-    killPointsPivot: 100_000_000,
-    deathsPivot: 2_000_000,
-    valorPivot: 3_000_000,
-    t5KillsPivot: 1_000_000,
-    prevKvkDkpPivot: 30_000_000,
     prevKvkDkpWeights: { t4: 10, t5: 20, deaths: 50 }, // Variant B
     farmOnlyPenalty: -10,
   },
+  // Season of Conquest — post-LK, T5-heavy, ~10× the LK magnitudes.
+  // Anchors:
+  //   p50 from average active SoC kingdom governor (30M power),
+  //   p80 from mid-whale 12-24mo (~100M power, marketplace $300-800
+  //   listings, Devish19 reference at 200M is mid-p95),
+  //   p99 above the top-1 in top-100 SoC kingdom (~250M power).
   "season-of-conquest": {
+    power:      { p50: 30_000_000,  p80: 100_000_000, p95: 200_000_000, p99: 400_000_000 },
+    killPoints: { p50: 600_000_000, p80: 3_000_000_000, p95: 8_000_000_000, p99: 18_000_000_000 },
+    deaths:     { p50: 4_000_000,   p80: 12_000_000,  p95: 25_000_000,  p99: 50_000_000 },
+    valor:      { p50: 3_000_000,   p80: 10_000_000,  p95: 20_000_000,  p99: 30_000_000 },
+    t5Kills:    { p50: 1_000_000,   p80: 5_000_000,   p95: 12_000_000,  p99: 25_000_000 },
+    prevKvkDkp: { p50: 200_000_000, p80: 1_200_000_000, p95: 3_500_000_000, p99: 8_000_000_000 },
     agePivotMonths: 30,
     vipPivot: 15,
-    powerPivot: 250_000_000,
-    killPointsPivot: 1_500_000_000,
-    deathsPivot: 10_000_000,
-    valorPivot: 10_000_000,
-    t5KillsPivot: 5_000_000,
-    prevKvkDkpPivot: 1_000_000_000,
     prevKvkDkpWeights: { t4: 10, t5: 30, deaths: 80 }, // Variant A
     farmOnlyPenalty: -15,
   },
 };
 
-/** Component caps (max pts) — stable across profiles, only pivots shift. */
+/** Component caps (max pts). Sum to 100 minus headroom for spending
+ *  modifier (±5) and sanity penalties. */
 const CAPS = {
-  age: 18,
-  vip: 10,
+  age: 12,
+  vip: 8,
   power: 18,
-  killPoints: 16,
-  deaths: 12,
-  valor: 8,
-  t5Kills: 8,
-  prevKvkDkp: 10,
+  killPoints: 18,
+  deaths: 14,
+  valor: 10,
+  t5Kills: 12,
+  prevKvkDkp: 8,
 };
 
 export interface ScoreInputs {
@@ -147,7 +143,6 @@ export interface ScoreInputs {
   vipLevel: string;
   powerN: number | null;
   killPointsN: number | null;
-  /** Per-tier kill counts from the in-game Kill Data popup (all 5). */
   t1KillsN: number | null;
   t2KillsN: number | null;
   t3KillsN: number | null;
@@ -155,7 +150,6 @@ export interface ScoreInputs {
   t5KillsN: number | null;
   deathsN: number | null;
   maxValorPointsN: number | null;
-  /** Last-KvK stats from the applicant's DKP-scan upload. Optional. */
   prevKvkT4KillsN: number | null;
   prevKvkT5KillsN: number | null;
   prevKvkDeathsN: number | null;
@@ -167,8 +161,6 @@ export interface ScoreResult {
   score: number;
   tags: string[];
   profile: ScoringProfile;
-  /** Server-computed DKP for the last KvK using the profile's weights.
-   *  Null when no prevKvk* data was supplied. */
   prevKvkDkpComputed: number | null;
   breakdown: {
     accountAge: number;
@@ -185,14 +177,29 @@ export interface ScoreResult {
 }
 
 /**
- * Saturating curve: input → 0..1 as `value` rises through `pivot`,
- * with diminishing returns past it. Log10 normalization handles the
- * heavy-tailed RoK numerics (10× differences) gracefully.
+ * Piecewise-linear curve with population checkpoints. Returns 0..1.
+ *   value ≤ 0      → 0
+ *   value at p50   → 0.40
+ *   value at p80   → 0.70
+ *   value at p95   → 0.90
+ *   value at p99   → 0.96
+ *   value at 1.5×p99 → 1.00 (asymptote)
+ *
+ * Why not log10: log saturates by p80 — every whale lands at 95+ and
+ * the formula loses discrimination in the band that matters most.
+ * Piecewise-linear preserves dynamic range across the upper tail.
  */
-function logScore(value: number | null | undefined, pivot: number): number {
+function piecewiseScore(
+  value: number | null | undefined,
+  anchors: PiecewiseAnchors,
+): number {
   if (value == null || !Number.isFinite(value) || value <= 0) return 0;
-  if (pivot <= 0) return 0;
-  return Math.max(0, Math.min(1, Math.log10(value + 1) / Math.log10(pivot + 1)));
+  const { p50, p80, p95, p99 } = anchors;
+  if (value <= p50) return (value / p50) * 0.4;
+  if (value <= p80) return 0.4 + ((value - p50) / (p80 - p50)) * 0.3;
+  if (value <= p95) return 0.7 + ((value - p80) / (p95 - p80)) * 0.2;
+  if (value <= p99) return 0.9 + ((value - p95) / (p99 - p95)) * 0.06;
+  return Math.min(1.0, 0.96 + ((value - p99) / (p99 * 0.5)) * 0.04);
 }
 
 function ageMonthsFromDate(born: Date | null): number {
@@ -214,23 +221,6 @@ const SPENDING_LABELS: Record<SpendingTier, string> = {
   kraken: "kraken",
 };
 
-/**
- * Lilith's in-game Kill Points formula: T1=1, T2=2, T3=4, T4=10,
- * T5=20 KP per kill (T6 still maps to T5 weight as of Heroic Anthem).
- * Returns the share of KP coming from low-tier kills (T1+T2+T3) — the
- * canonical signal for "T1 trader" detection.
- *
- * Why it works: a legitimate combat whale produces lots of T1 kills
- * as a side-effect of zeroing real cities (real cities have ~10–20%
- * T1 reserves), but T4/T5 still dominate the KP because their
- * multipliers are 10× and 20× higher. A T1-trader who farms low-tier
- * kills to pad MVP thresholds gets KP almost entirely from T1.
- *
- * Empirical thresholds (see Obsidian research note):
- *   < 0.40  → normal
- *   0.40–0.60 → mostly-low-tier (officer-review pill)
- *   > 0.60  → t1-trader (numeric penalty)
- */
 function lowTierKpShare(
   t1: number | null,
   t2: number | null,
@@ -243,19 +233,12 @@ function lowTierKpShare(
   const v3 = t3 ?? 0;
   const v4 = t4 ?? 0;
   const v5 = t5 ?? 0;
-  const total = v1 * 1 + v2 * 2 + v3 * 4 + v4 * 10 + v5 * 20;
-  if (total < 100_000) return 0; // sample too small — no signal
-  const lowTier = v1 * 1 + v2 * 2 + v3 * 4;
+  const total = v1 + v2 * 2 + v3 * 4 + v4 * 10 + v5 * 20;
+  if (total < 100_000) return 0;
+  const lowTier = v1 + v2 * 2 + v3 * 4;
   return lowTier / total;
 }
 
-/**
- * Returns the last-KvK DKP using the active profile's weights:
- *   LK   (Variant B) → t4×10 + t5×20 + deaths×50
- *   SoC  (Variant A) → t4×10 + t5×30 + deaths×80
- * Both formulas are publicly used by 2779 / 2708 alliance rules; LK
- * variant accommodates thinner T5 supply during Lost Kingdom seasons.
- */
 function computePrevKvkDkp(
   t4: number | null,
   t5: number | null,
@@ -270,24 +253,13 @@ function computePrevKvkDkp(
   return v4 * w.t4 + v5 * w.t5 + vd * w.deaths;
 }
 
-/**
- * Compute the applicant's score, tags, and breakdown. Pure function.
- * Caller plumbs percentile-derived tags (top-1pct etc.) since those
- * need cohort context.
- */
 export function computeScore(input: ScoreInputs): ScoreResult {
-  // Profile selection cascade:
-  //   1. explicit override (admin PATCH)
-  //   2. inferred from account age (≥12mo → SoC, else LK)
-  //   3. fallback DEFAULT_PROFILE
-  const profile =
-    input.scoringProfile ?? inferProfile(input.accountBornAt);
+  const profile = input.scoringProfile ?? inferProfile(input.accountBornAt);
   const pivots = PROFILES[profile];
 
   const months = ageMonthsFromDate(input.accountBornAt);
   const vip = Number.parseInt(input.vipLevel, 10);
 
-  // ---------------- positive components ----------------
   const ageScore = Math.min(
     CAPS.age,
     (months / pivots.agePivotMonths) * CAPS.age,
@@ -295,13 +267,12 @@ export function computeScore(input: ScoreInputs): ScoreResult {
   const vipScore = Number.isFinite(vip)
     ? Math.min(CAPS.vip, (vip / pivots.vipPivot) * CAPS.vip)
     : 0;
-  const powerScore = logScore(input.powerN, pivots.powerPivot) * CAPS.power;
+  const powerScore = piecewiseScore(input.powerN, pivots.power) * CAPS.power;
 
-  // KP is scaled down by the low-tier KP share — a T1-trader with 100M
-  // KP that's 90% T1 contributes only ~10% effective combat KP. Combat
-  // whales who zero real cities have ~10–25% low-tier share (city
-  // reserves include T1) so they're barely affected. Without this
-  // scaling, the KP component rewards the inflated number directly.
+  // KP scaled by (1 - lowTierShare) — a T1-trader with inflated KP
+  // gets discounted at source instead of needing a heavier penalty
+  // downstream. Combat whales who zero real cities (~10-25% T1
+  // share) are barely affected.
   const ltShareForKp = lowTierKpShare(
     input.t1KillsN,
     input.t2KillsN,
@@ -314,20 +285,18 @@ export function computeScore(input: ScoreInputs): ScoreResult {
       ? input.killPointsN * (1 - ltShareForKp)
       : null;
   const kpScore =
-    logScore(effectiveKp, pivots.killPointsPivot) * CAPS.killPoints;
+    piecewiseScore(effectiveKp, pivots.killPoints) * CAPS.killPoints;
 
   const deathsScore =
-    logScore(input.deathsN, pivots.deathsPivot) * CAPS.deaths;
+    piecewiseScore(input.deathsN, pivots.deaths) * CAPS.deaths;
   const valorScore =
-    logScore(input.maxValorPointsN, pivots.valorPivot) * CAPS.valor;
+    piecewiseScore(input.maxValorPointsN, pivots.valor) * CAPS.valor;
 
-  // T5 component — uses absolute kill count vs pivot, NOT a ratio.
-  // Ratio gave a loophole: 50k T4 + 50k T5 = 50% ratio = max t5Score
-  // even though the player has microscopic absolute combat output.
+  // T5 absolute count (not ratio) — see prior commits for the
+  // loophole rationale.
   const t5Score =
-    logScore(input.t5KillsN, pivots.t5KillsPivot) * CAPS.t5Kills;
+    piecewiseScore(input.t5KillsN, pivots.t5Kills) * CAPS.t5Kills;
 
-  // Last-KvK DKP component.
   const prevDkp = computePrevKvkDkp(
     input.prevKvkT4KillsN,
     input.prevKvkT5KillsN,
@@ -336,7 +305,7 @@ export function computeScore(input: ScoreInputs): ScoreResult {
   );
   const prevDkpScore =
     prevDkp != null
-      ? logScore(prevDkp, pivots.prevKvkDkpPivot) * CAPS.prevKvkDkp
+      ? piecewiseScore(prevDkp, pivots.prevKvkDkp) * CAPS.prevKvkDkp
       : 0;
 
   const baseStats =
@@ -345,23 +314,21 @@ export function computeScore(input: ScoreInputs): ScoreResult {
   // ---------------- spending modifier (±5) ----------------
   let spendingMod = 0;
   if (input.spendingTier === "f2p") {
-    spendingMod = baseStats > 40 ? 5 : baseStats > 20 ? 2 : 0;
+    spendingMod = baseStats > 50 ? 5 : baseStats > 30 ? 2 : 0;
   } else if (input.spendingTier === "low") {
-    spendingMod = baseStats > 45 ? 3 : 0;
+    spendingMod = baseStats > 55 ? 3 : 0;
   } else if (
     input.spendingTier === "kraken" ||
     input.spendingTier === "whale"
   ) {
-    if (baseStats < 20) spendingMod = -5;
-    else if (baseStats < 30) spendingMod = -2;
+    if (baseStats < 25) spendingMod = -5;
+    else if (baseStats < 40) spendingMod = -2;
   }
 
   // ---------------- sanity penalties ----------------
   const sanityTags: string[] = [];
   let sanityPenalty = 0;
 
-  // T1-trade detection — see lowTierKpShare doc. Reuses the share we
-  // already computed for the KP-component scaling above.
   if (ltShareForKp > 0.6) {
     sanityPenalty -= 12;
     sanityTags.push("t1-trader");
@@ -370,19 +337,15 @@ export function computeScore(input: ScoreInputs): ScoreResult {
     sanityTags.push("mostly-low-tier");
   }
 
-  // Farm-only — high KP without any T5 kills. Useless in real KvK
-  // because T5 is the bulk of post-CH25 combat.
   if (
     input.killPointsN != null &&
     input.killPointsN > 200_000_000 &&
     (input.t5KillsN ?? 0) < 1_000_000
   ) {
-    sanityPenalty += pivots.farmOnlyPenalty; // negative
+    sanityPenalty += pivots.farmOnlyPenalty;
     sanityTags.push("farm-only");
   }
 
-  // Bunkerer — sub-2% deaths/power ratio on a real-sized account
-  // signals kill-feeding without committing troops.
   if (
     input.powerN != null &&
     input.powerN > 50_000_000 &&
@@ -393,8 +356,6 @@ export function computeScore(input: ScoreInputs): ScoreResult {
     sanityTags.push("bunkerer");
   }
 
-  // Dormant veteran — lifetime valor proves they were active once,
-  // but recent KP doesn't match. Account peaked then went idle.
   if (
     (input.maxValorPointsN ?? 0) > 5_000_000 &&
     (input.killPointsN ?? 0) < 50_000_000
@@ -408,14 +369,11 @@ export function computeScore(input: ScoreInputs): ScoreResult {
   const raw = ageVip + baseStats + spendingMod + sanityPenalty;
   const score = Math.max(0, Math.min(100, Math.round(raw * 10) / 10));
 
-  // Weak-whale needs the final score — second pass after clamp.
   if (
     (input.spendingTier === "whale" || input.spendingTier === "kraken") &&
     score < 40
   ) {
     sanityTags.push("weak-whale");
-    // Penalty is informational at this point — the low score IS the
-    // penalty. We don't subtract again to avoid feedback loop.
   }
 
   // ---------------- descriptive tags ----------------
@@ -430,7 +388,6 @@ export function computeScore(input: ScoreInputs): ScoreResult {
     }
   }
 
-  // Combat profile.
   if (
     input.deathsN != null &&
     input.powerN != null &&
@@ -442,7 +399,6 @@ export function computeScore(input: ScoreInputs): ScoreResult {
     else if (ratio < 0.05 && input.powerN > 50_000_000) tags.add("turtle");
   }
 
-  // T5 readiness — orthogonal to the score, just the binary signal.
   if ((input.t5KillsN ?? 0) > 1_000_000) {
     tags.add("t5-ready");
   } else if (
@@ -458,7 +414,6 @@ export function computeScore(input: ScoreInputs): ScoreResult {
 
   if (input.spendingTier === "f2p" && score >= 60) tags.add("f2p-hero");
 
-  // KvK signal.
   if (input.maxValorPointsN != null && input.maxValorPointsN >= 5_000_000) {
     tags.add("kvk-veteran");
   } else if (
@@ -492,10 +447,6 @@ function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }
 
-/**
- * Returns the percentile-band tag for a given 0..1 percent_rank value,
- * or null if the applicant falls in the unremarkable middle.
- */
 export function percentileTag(pct: number | null | undefined): string | null {
   if (pct == null || !Number.isFinite(pct)) return null;
   if (pct >= 0.99) return "top-1pct";
