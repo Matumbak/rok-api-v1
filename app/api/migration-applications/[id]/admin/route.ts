@@ -225,6 +225,28 @@ export async function GET(
           (item.prevKvkT5KillsN ?? 0) * dkpWeights.t5 +
           (item.prevKvkDeathsN ?? 0) * dkpWeights.deaths
         : null;
+    // Recompute the score breakdown on-the-fly so admin can render a
+    // per-component "10/18" tooltip on hover. We don't persist the
+    // breakdown JSON because it's deterministic from the inputs and
+    // changing the formula in code would invalidate stored values.
+    const recomputed = computeScore({
+      accountBornAt: item.accountBornAt,
+      vipLevel: item.vipLevel,
+      powerN: item.powerN,
+      killPointsN: item.killPointsN,
+      t1KillsN: item.t1KillsN,
+      t2KillsN: item.t2KillsN,
+      t3KillsN: item.t3KillsN,
+      t4KillsN: item.t4KillsN,
+      t5KillsN: item.t5KillsN,
+      deathsN: item.deathsN,
+      maxValorPointsN: item.maxValorPointsN,
+      prevKvkT4KillsN: item.prevKvkT4KillsN,
+      prevKvkT5KillsN: item.prevKvkT5KillsN,
+      prevKvkDeathsN: item.prevKvkDeathsN,
+      spendingTier: item.spendingTier as SpendingTier | null,
+      scoringProfile: item.scoringProfile as ScoringProfile | null,
+    });
     return withCors(
       request,
       NextResponse.json({
@@ -232,6 +254,7 @@ export async function GET(
         percentiles,
         driftFlags,
         prevKvkDkpComputed,
+        scoreBreakdown: recomputed.breakdown,
       }),
     );
   } catch (err) {
