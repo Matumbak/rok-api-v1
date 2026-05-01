@@ -238,7 +238,6 @@ export async function GET(request: Request) {
           stoneN: true,
           goldN: true,
           previousKvkDkpN: true,
-          civilization: true,
           marches: true,
           constructionPowerN: true,
           technologyPowerN: true,

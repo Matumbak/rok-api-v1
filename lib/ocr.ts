@@ -197,9 +197,18 @@ Screen routing — fill ONLY the listed fields per screen:
 
   2. KILL DATA POPUP ("Данные по убийствам" / "Kill Data" header):
        t1Kills, t2Kills, t3Kills, t4Kills, t5Kills
-     ⚠ The profile screen is dimmed underneath this popup — DO NOT
-     extract power / killPoints / governorId / nickname even if you
-     can read them. Those fields go null on this screen.
+     Read the LEFT column "Убийства" / "Kills" — the kill COUNTS.
+     The right column "Очки убийств" / "Kill Points" is the per-tier
+     points contribution; ignore it entirely.
+
+     ⚠ EVERYTHING ELSE on this screen MUST be null — no exceptions.
+       - The dimmed profile underneath shows partial values for
+         power / killPoints / governorId / nickname / valor; even if
+         readable, set them to null.
+       - The popup itself shows a "Всего" / "Total" line at the bottom.
+         DO NOT report it as killPoints. killPoints stays null.
+       - Per-tier "Очки убийств" cells are NOT killPoints. Never copy
+         a per-tier points value into killPoints.
 
   3. DETAILS TAB ("Подробнее" / "Details" header, "Войска" tab):
        deaths
@@ -282,7 +291,17 @@ Field guide (formats):
 - power, killPoints, maxValorPoints, t1Kills..t5Kills, deaths,
   food, wood, stone, gold: ALWAYS raw integers as STRINGS, no
   abbreviations: "84M" → "84000000", "1.2B" → "1200000000",
-  "330.7K" → "330700". Strip all thousand separators.
+  "330.7K" → "330700".
+- Thousand separators: RoK uses ASCII space (0x20), non-breaking
+  space (U+00A0), comma, or period between every 3-digit group.
+  Read the FULL number end-to-end — every group is part of one
+  integer. Never drop the leading group. Examples:
+    "77 676 008"     → "77676008"   (NOT "676008")
+    "1 796 955 517"  → "1796955517" (NOT "955517" or "796955517")
+    "330 700"        → "330700"
+    "7 191 564"      → "7191564"
+  If you see digit groups separated by spaces, all groups belong
+  to the same number; the leftmost group is the most significant.
 - Cyrillic suffix letters (К/М/Б/В/Т) and Latin (K/M/B/T) denote
   thousand / million / billion / trillion respectively.
 - vipLevel: a small integer as string ("14").

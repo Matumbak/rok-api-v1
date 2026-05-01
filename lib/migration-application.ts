@@ -41,7 +41,6 @@ export const submitSchema = z.object({
   nickname: z.string().min(1).max(60),
   currentKingdom: z.string().min(1).max(20),
   currentAlliance: z.string().max(40).optional().nullable(),
-  civilization: z.string().max(40).optional().nullable(),
   power: z.string().max(40),
   killPoints: z.string().max(40),
   vipLevel: z.string().max(10),

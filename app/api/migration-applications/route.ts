@@ -76,7 +76,6 @@ export async function POST(request: Request) {
         nickname: data.nickname,
         currentKingdom: data.currentKingdom,
         currentAlliance: data.currentAlliance ?? null,
-        civilization: data.civilization ?? null,
         power: data.power,
         killPoints: data.killPoints,
         vipLevel: data.vipLevel,
