@@ -18,10 +18,27 @@
  * — the raw string is kept on the side so an admin can correct it.
  */
 
-const DAYS_RE = /(\d+)\s*(?:дн\.?|дней|d|day|days)\b/i;
-const HOURS_RE = /(\d+)\s*(?:ч\.?|час|часа|часов|h|hr|hour|hours)\b/i;
-const MINUTES_RE =
-  /(\d+)\s*(?:мин\.?|минут|минуты|м\.?|m|min|minute|minutes)\b/i;
+// `\b` is ASCII-only in JS regex — `\w` doesn't include Cyrillic, so a
+// boundary between "ч" and " " never fires, and "63 ч 20 м" silently
+// fails. We use a negative-lookahead instead: the unit must NOT be
+// followed by another letter (which would mean we're matching a prefix
+// of a longer word). Trailing dot, digits, whitespace, or end-of-string
+// are all fine.
+const NOT_LETTER = /(?![\p{L}])/u;
+const DAYS_RE = new RegExp(
+  String.raw`(\d+)\s*(?:дней|дня|дн\.?|days?|d)` + NOT_LETTER.source,
+  "iu",
+);
+const HOURS_RE = new RegExp(
+  String.raw`(\d+)\s*(?:часов|часа|час|ч\.?|hours?|hrs?|hr|h)` +
+    NOT_LETTER.source,
+  "iu",
+);
+const MINUTES_RE = new RegExp(
+  String.raw`(\d+)\s*(?:минут[ыа]?|мин\.?|м\.?|minutes?|mins?|m)` +
+    NOT_LETTER.source,
+  "iu",
+);
 
 export function parseRokDuration(
   input: string | null | undefined,
