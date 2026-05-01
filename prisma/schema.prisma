@@ -243,6 +243,12 @@ model MigrationApplication {
   /// or NULLability to add it without a write-time backfill.
   spendingTier      String?
 
+  /// Which scoring profile the formula uses for this applicant. Drives
+  /// stage-aware pivots — Lost Kingdom (KvK 1-4) numbers are ~10× lower
+  /// than Season of Conquest. Null = use the server default
+  /// (currently `lost-kingdom` for kingdom 4028 in KvK1).
+  scoringProfile    String?
+
   /// Cached overall score (0..100) recomputed on every write. Null only
   /// on records that pre-date the scoring engine (legacy seed data).
   overallScore      Float?

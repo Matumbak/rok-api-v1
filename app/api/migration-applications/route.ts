@@ -12,7 +12,11 @@ import {
 } from "@/lib/migration-application";
 import { parseRokNumber } from "@/lib/parse-rok-number";
 import { parseRokDuration } from "@/lib/parse-rok-duration";
-import { computeScore, type SpendingTier } from "@/lib/scoring";
+import {
+  computeScore,
+  type ScoringProfile,
+  type SpendingTier,
+} from "@/lib/scoring";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -89,9 +93,18 @@ export async function POST(request: Request) {
       vipLevel: data.vipLevel,
       powerN: normalized.powerN,
       killPointsN: normalized.killPointsN,
+      t1KillsN: normalized.t1KillsN,
+      t2KillsN: normalized.t2KillsN,
+      t3KillsN: normalized.t3KillsN,
+      t4KillsN: normalized.t4KillsN,
+      t5KillsN: normalized.t5KillsN,
       deathsN: normalized.deathsN,
       maxValorPointsN: normalized.maxValorPointsN,
+      prevKvkT4KillsN: normalized.prevKvkT4KillsN,
+      prevKvkT5KillsN: normalized.prevKvkT5KillsN,
+      prevKvkDeathsN: normalized.prevKvkDeathsN,
       spendingTier: data.spendingTier as SpendingTier,
+      scoringProfile: (data.scoringProfile as ScoringProfile) ?? null,
     });
 
     const created = await prisma.migrationApplication.create({
@@ -144,6 +157,7 @@ export async function POST(request: Request) {
         scoutVerified: data.scoutVerified ?? false,
 
         spendingTier: data.spendingTier,
+        scoringProfile: data.scoringProfile ?? null,
         overallScore: score,
         tags: tags as unknown as Prisma.InputJsonValue,
 

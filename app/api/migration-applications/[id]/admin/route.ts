@@ -21,7 +21,9 @@ import { parseRokDuration } from "@/lib/parse-rok-duration";
 import {
   computeScore,
   percentileTag,
+  SCORING_PROFILES,
   SPENDING_TIERS,
+  type ScoringProfile,
   type SpendingTier,
 } from "@/lib/scoring";
 import { getPercentilesForApp } from "@/lib/percentiles";
@@ -84,6 +86,10 @@ const patchSchema = z
     spendingTier: z
       .enum(SPENDING_TIERS as unknown as [string, ...string[]])
       .optional(),
+    scoringProfile: z
+      .enum(SCORING_PROFILES as unknown as [string, ...string[]])
+      .optional()
+      .nullable(),
     manualTags: z.array(z.string().min(1).max(40)).max(20).optional().nullable(),
     marches: z.number().int().min(0).max(20).optional().nullable(),
     equipmentSummary: z.record(z.string(), z.string()).optional().nullable(),
@@ -202,9 +208,31 @@ export async function GET(
     const driftFlags = computeDriftFlags(
       item as unknown as Record<string, unknown>,
     );
+    // Recompute the canonical DKP for the last KvK using the active
+    // profile's weights (LK 10/20/50 vs SoC 10/30/80). Lets admin
+    // compare against the applicant-reported `previousKvkDkp` to
+    // surface fudged numbers.
+    const profile = (item.scoringProfile ?? "lost-kingdom") as ScoringProfile;
+    const dkpWeights =
+      profile === "season-of-conquest"
+        ? { t4: 10, t5: 30, deaths: 80 }
+        : { t4: 10, t5: 20, deaths: 50 };
+    const prevKvkDkpComputed =
+      item.prevKvkT4KillsN != null ||
+      item.prevKvkT5KillsN != null ||
+      item.prevKvkDeathsN != null
+        ? (item.prevKvkT4KillsN ?? 0) * dkpWeights.t4 +
+          (item.prevKvkT5KillsN ?? 0) * dkpWeights.t5 +
+          (item.prevKvkDeathsN ?? 0) * dkpWeights.deaths
+        : null;
     return withCors(
       request,
-      NextResponse.json({ ...item, percentiles, driftFlags }),
+      NextResponse.json({
+        ...item,
+        percentiles,
+        driftFlags,
+        prevKvkDkpComputed,
+      }),
     );
   } catch (err) {
     return withCors(
@@ -308,6 +336,7 @@ export async function PATCH(
     }
     if ("scoutVerified" in patch) data.scoutVerified = patch.scoutVerified ?? false;
     if ("spendingTier" in patch) data.spendingTier = patch.spendingTier;
+    if ("scoringProfile" in patch) data.scoringProfile = patch.scoringProfile;
     if ("manualTags" in patch) {
       data.manualTags = (patch.manualTags ??
         Prisma.JsonNull) as Prisma.InputJsonValue;
@@ -395,10 +424,19 @@ export async function PATCH(
       "vipLevel",
       "power",
       "killPoints",
+      "t1Kills",
+      "t2Kills",
+      "t3Kills",
+      "t4Kills",
+      "t5Kills",
       "deaths",
       "maxValorPoints",
+      "prevKvkT4Kills",
+      "prevKvkT5Kills",
+      "prevKvkDeaths",
       "accountBornAt",
       "spendingTier",
+      "scoringProfile",
     ] as const;
     const scoringDirty = SCORE_INPUT_FIELDS.some((f) => f in patch);
     if (scoringDirty) {
@@ -408,12 +446,30 @@ export async function PATCH(
           vipLevel: true,
           accountBornAt: true,
           spendingTier: true,
+          scoringProfile: true,
           powerN: true,
           killPointsN: true,
+          t1KillsN: true,
+          t2KillsN: true,
+          t3KillsN: true,
+          t4KillsN: true,
+          t5KillsN: true,
           deathsN: true,
           maxValorPointsN: true,
+          prevKvkT4KillsN: true,
+          prevKvkT5KillsN: true,
+          prevKvkDeathsN: true,
         },
       });
+      const dataRec = data as Record<string, unknown>;
+      const currentRec = (current ?? {}) as Record<string, unknown>;
+      const pickN = (key: string): number | null => {
+        const fromData = dataRec[key];
+        if (typeof fromData === "number") return fromData;
+        if (fromData === null) return null;
+        const fromCurrent = currentRec[key];
+        return typeof fromCurrent === "number" ? fromCurrent : null;
+      };
       const merged = {
         vipLevel:
           (data.vipLevel as string | null | undefined) ??
@@ -427,29 +483,40 @@ export async function PATCH(
           (data.spendingTier as string | null | undefined) ??
           current?.spendingTier ??
           null,
-        powerN:
-          (data.powerN as number | null | undefined) ?? current?.powerN ?? null,
-        killPointsN:
-          (data.killPointsN as number | null | undefined) ??
-          current?.killPointsN ??
+        scoringProfile:
+          (data.scoringProfile as string | null | undefined) ??
+          current?.scoringProfile ??
           null,
-        deathsN:
-          (data.deathsN as number | null | undefined) ??
-          current?.deathsN ??
-          null,
-        maxValorPointsN:
-          (data.maxValorPointsN as number | null | undefined) ??
-          current?.maxValorPointsN ??
-          null,
+        powerN: pickN("powerN"),
+        killPointsN: pickN("killPointsN"),
+        t1KillsN: pickN("t1KillsN"),
+        t2KillsN: pickN("t2KillsN"),
+        t3KillsN: pickN("t3KillsN"),
+        t4KillsN: pickN("t4KillsN"),
+        t5KillsN: pickN("t5KillsN"),
+        deathsN: pickN("deathsN"),
+        maxValorPointsN: pickN("maxValorPointsN"),
+        prevKvkT4KillsN: pickN("prevKvkT4KillsN"),
+        prevKvkT5KillsN: pickN("prevKvkT5KillsN"),
+        prevKvkDeathsN: pickN("prevKvkDeathsN"),
       };
       const { score, tags } = computeScore({
         accountBornAt: merged.accountBornAt,
         vipLevel: merged.vipLevel ?? "",
         powerN: merged.powerN,
         killPointsN: merged.killPointsN,
+        t1KillsN: merged.t1KillsN,
+        t2KillsN: merged.t2KillsN,
+        t3KillsN: merged.t3KillsN,
+        t4KillsN: merged.t4KillsN,
+        t5KillsN: merged.t5KillsN,
         deathsN: merged.deathsN,
         maxValorPointsN: merged.maxValorPointsN,
+        prevKvkT4KillsN: merged.prevKvkT4KillsN,
+        prevKvkT5KillsN: merged.prevKvkT5KillsN,
+        prevKvkDeathsN: merged.prevKvkDeathsN,
         spendingTier: merged.spendingTier as SpendingTier | null,
+        scoringProfile: merged.scoringProfile as ScoringProfile | null,
       });
       data.overallScore = score;
       data.tags = tags as unknown as Prisma.InputJsonValue;

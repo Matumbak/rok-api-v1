@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { SPENDING_TIERS } from "@/lib/scoring";
+import { SCORING_PROFILES, SPENDING_TIERS } from "@/lib/scoring";
 
 /** Categories the form sends — purely advisory, stored alongside each blob. */
 export const SCREENSHOT_CATEGORIES = [
@@ -115,6 +115,14 @@ export const submitSchema = z.object({
 
   /// Self-declared spend bracket — required on every new submission.
   spendingTier: z.enum(SPENDING_TIERS as unknown as [string, ...string[]]),
+
+  /// Stage-aware scoring profile override. Form does not send this —
+  /// server defaults via DEFAULT_PROFILE. Admin can flip per-applicant
+  /// via PATCH when an applicant comes from a different game stage.
+  scoringProfile: z
+    .enum(SCORING_PROFILES as unknown as [string, ...string[]])
+    .optional()
+    .nullable(),
 
   marches: z.number().int().min(0).max(20).optional().nullable(),
   equipmentSummary: z.record(z.string(), z.string()).optional().nullable(),
