@@ -85,7 +85,6 @@ export const submitSchema = z.object({
 
   /// Per-KvK stats from the applicant's DKP scan. Distinct from the
   /// account-wide power/killPoints/etc. — these reflect last KvK only.
-  prevKvkPower: z.string().max(40).optional().nullable(),
   prevKvkKillPoints: z.string().max(40).optional().nullable(),
   prevKvkT4Kills: z.string().max(40).optional().nullable(),
   prevKvkT5Kills: z.string().max(40).optional().nullable(),
@@ -102,6 +101,17 @@ export const submitSchema = z.object({
   /// Mirror of the OCR's `isScoutCommander` flag. True iff at least one
   /// uploaded commander screenshot was confirmed as the starter Scout.
   scoutVerified: z.boolean().optional().nullable(),
+
+  /// Snapshot of what OCR / DKP-lookup auto-extracted at submit time
+  /// for the watched-field set (power / KP / kills / deaths / resources
+  /// / speedups). Used by admin to flag fields the applicant edited
+  /// significantly after autofill — the canonical "did the user fudge
+  /// the numbers" signal. Server stores normalized form: raw integers
+  /// for stats, minutes for speedups.
+  ocrAutofill: z
+    .record(z.string(), z.string().or(z.number()).nullable())
+    .optional()
+    .nullable(),
 
   /// Self-declared spend bracket — required on every new submission.
   spendingTier: z.enum(SPENDING_TIERS as unknown as [string, ...string[]]),
@@ -152,7 +162,6 @@ export const NORMALIZED_FIELD_MAP: Record<string, string> = {
   arkOsirisWins: "arkOsirisWinsN",
   valorPoints: "valorPointsN",
   maxValorPoints: "maxValorPointsN",
-  prevKvkPower: "prevKvkPowerN",
   prevKvkKillPoints: "prevKvkKillPointsN",
   prevKvkT4Kills: "prevKvkT4KillsN",
   prevKvkT5Kills: "prevKvkT5KillsN",
@@ -173,6 +182,37 @@ export const SPEEDUP_FIELD_MAP: Record<string, string> = {
 };
 
 export type SubmitBody = z.infer<typeof submitSchema>;
+
+/**
+ * Fields admin watches for "applicant heavily edited the auto-filled
+ * value" drift. The two arrays carve the watched set into stat-style
+ * (raw integer) vs duration-style (minutes) handling — drift compute
+ * uses the right unit per group.
+ */
+export const DRIFT_WATCHED_STATS = [
+  "power",
+  "killPoints",
+  "t4Kills",
+  "t5Kills",
+  "deaths",
+  "food",
+  "wood",
+  "stone",
+  "gold",
+] as const;
+
+export const DRIFT_WATCHED_SPEEDUPS = [
+  "speedupsConstruction",
+  "speedupsResearch",
+  "speedupsTraining",
+  "speedupsHealing",
+  "speedupsUniversal",
+] as const;
+
+export const DRIFT_THRESHOLD = 0.05;
+
+/** Drift verdict per watched field — sent in admin GET responses. */
+export type DriftFlag = "auto-edited" | "manual" | null;
 
 /** Days to keep blobs before the cleanup job nukes them. */
 export const BLOB_RETENTION_DAYS: Record<ApplicationStatus, number | null> = {

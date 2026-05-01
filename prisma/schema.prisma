@@ -168,16 +168,25 @@ model MigrationApplication {
   /// t4Kills/etc. above: a DKP scan reflects what was achieved DURING
   /// the last KvK only. We keep them on separate columns so admin can
   /// compare "what they did last cycle" against "what they bring now".
-  prevKvkPower         String?
   prevKvkKillPoints    String?
   prevKvkT4Kills       String?
   prevKvkT5Kills       String?
   prevKvkDeaths        String?
-  prevKvkPowerN        Float?
   prevKvkKillPointsN   Float?
   prevKvkT4KillsN      Float?
   prevKvkT5KillsN      Float?
   prevKvkDeathsN       Float?
+
+  /// What OCR / DKP-lookup auto-filled at submit time, per watched
+  /// field. Used to compute drift flags in admin: if the applicant's
+  /// final value diverges by >5% from what was auto-detected, an
+  /// amber "auto-edited" pill is shown next to the value with a
+  /// popover comparing both. Stored as normalized numbers (minutes
+  /// for speedups, raw integers for everything else). Shape:
+  ///   { power: 84000000, killPoints: 152000000,
+  ///     speedupsConstruction: 91460, ... }
+  /// Only the watched-field set is allowed; other keys are ignored.
+  ocrAutofill          Json?
 
   /// Object holding any extra speedup categories the parser didn't recognize
   /// (event speedups, KvK speedups, etc.). Free-form by design.

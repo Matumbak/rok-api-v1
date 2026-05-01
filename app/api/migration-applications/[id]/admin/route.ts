@@ -7,10 +7,14 @@ import { withCors } from "@/lib/cors";
 import { deleteBlobs } from "@/lib/blob";
 import {
   BLOB_RETENTION_DAYS,
+  DRIFT_THRESHOLD,
+  DRIFT_WATCHED_SPEEDUPS,
+  DRIFT_WATCHED_STATS,
   NORMALIZED_FIELD_MAP,
   SPEEDUP_FIELD_MAP,
   STATUSES,
   screenshotSchema,
+  type DriftFlag,
 } from "@/lib/migration-application";
 import { parseRokNumber } from "@/lib/parse-rok-number";
 import { parseRokDuration } from "@/lib/parse-rok-duration";
@@ -67,7 +71,6 @@ const patchSchema = z
     speedupsHealing: z.string().max(40).optional().nullable(),
     speedupsMinutes: z.number().int().nonnegative().optional().nullable(),
     speedupsBreakdown: z.record(z.string(), z.string()).optional().nullable(),
-    prevKvkPower: z.string().max(40).optional().nullable(),
     prevKvkKillPoints: z.string().max(40).optional().nullable(),
     prevKvkT4Kills: z.string().max(40).optional().nullable(),
     prevKvkT5Kills: z.string().max(40).optional().nullable(),
@@ -110,6 +113,73 @@ function getScreenshotUrls(json: Prisma.JsonValue | null): string[] {
     .filter((u): u is string => typeof u === "string" && u.length > 0);
 }
 
+/** Field-key → matching normalized DB column name. */
+const STAT_N_COLUMN: Record<(typeof DRIFT_WATCHED_STATS)[number], string> = {
+  power: "powerN",
+  killPoints: "killPointsN",
+  t4Kills: "t4KillsN",
+  t5Kills: "t5KillsN",
+  deaths: "deathsN",
+  food: "foodN",
+  wood: "woodN",
+  stone: "stoneN",
+  gold: "goldN",
+};
+const SPEEDUP_MIN_COLUMN: Record<
+  (typeof DRIFT_WATCHED_SPEEDUPS)[number],
+  string
+> = {
+  speedupsConstruction: "speedupsConstructionMinutes",
+  speedupsResearch: "speedupsResearchMinutes",
+  speedupsTraining: "speedupsTrainingMinutes",
+  speedupsHealing: "speedupsHealingMinutes",
+  speedupsUniversal: "speedupsUniversalMinutes",
+};
+
+/**
+ * Compare what OCR auto-filled at submit time vs what ended up in the
+ * DB to decide which fields deserve an "applicant edited the parsed
+ * value" badge in admin.
+ *
+ * Verdicts per watched field:
+ *   "auto-edited" — autofill snapshot exists and differs from final
+ *                   by >5%, OR the applicant cleared a field that was
+ *                   auto-filled (final is null)
+ *   "manual"      — applicant typed a value but no autofill snapshot
+ *                   was recorded (so admin can't verify against OCR)
+ *   null          — within tolerance, or both empty
+ */
+function computeDriftFlags(
+  app: Record<string, unknown>,
+): Record<string, DriftFlag> {
+  const autofill = (app.ocrAutofill ?? {}) as Record<string, unknown>;
+  const flags: Record<string, DriftFlag> = {};
+
+  const verdict = (
+    autoVal: number | null,
+    finalVal: number | null,
+  ): DriftFlag => {
+    if (autoVal == null || !Number.isFinite(autoVal) || autoVal === 0) {
+      return finalVal != null && finalVal !== 0 ? "manual" : null;
+    }
+    if (finalVal == null || finalVal === 0) return "auto-edited";
+    const drift = Math.abs(finalVal - autoVal) / Math.abs(autoVal);
+    return drift > DRIFT_THRESHOLD ? "auto-edited" : null;
+  };
+
+  for (const k of DRIFT_WATCHED_STATS) {
+    const auto = autofill[k];
+    const final = app[STAT_N_COLUMN[k]] as number | null;
+    flags[k] = verdict(typeof auto === "number" ? auto : null, final);
+  }
+  for (const k of DRIFT_WATCHED_SPEEDUPS) {
+    const auto = autofill[k];
+    const final = app[SPEEDUP_MIN_COLUMN[k]] as number | null;
+    flags[k] = verdict(typeof auto === "number" ? auto : null, final);
+  }
+  return flags;
+}
+
 /** GET /api/migration-applications/[id]/admin — full record. */
 export async function GET(
   request: Request,
@@ -129,9 +199,12 @@ export async function GET(
       );
     }
     const percentiles = await getPercentilesForApp(id);
+    const driftFlags = computeDriftFlags(
+      item as unknown as Record<string, unknown>,
+    );
     return withCors(
       request,
-      NextResponse.json({ ...item, percentiles }),
+      NextResponse.json({ ...item, percentiles, driftFlags }),
     );
   } catch (err) {
     return withCors(
@@ -211,7 +284,6 @@ export async function PATCH(
       "stone",
       "gold",
       "previousKvkDkp",
-      "prevKvkPower",
       "prevKvkKillPoints",
       "prevKvkT4Kills",
       "prevKvkT5Kills",

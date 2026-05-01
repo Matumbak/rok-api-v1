@@ -4,6 +4,8 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { withCors } from "@/lib/cors";
 import {
+  DRIFT_WATCHED_SPEEDUPS,
+  DRIFT_WATCHED_STATS,
   NORMALIZED_FIELD_MAP,
   SPEEDUP_FIELD_MAP,
   submitSchema,
@@ -60,6 +62,28 @@ export async function POST(request: Request) {
     const accountBornAtDate = data.accountBornAt
       ? new Date(`${data.accountBornAt}T00:00:00.000Z`)
       : null;
+
+    // Normalize the autofill snapshot into the same units we store on
+    // the actual columns: raw integers for stats, minutes for speedups.
+    // Anything outside the watched set is dropped on the floor — keeps
+    // the JSON tight + prevents future drift in observed-keys list.
+    const autofillNormalized: Record<string, number> = {};
+    if (data.ocrAutofill) {
+      for (const k of DRIFT_WATCHED_STATS) {
+        const raw = data.ocrAutofill[k];
+        if (raw == null) continue;
+        const n = parseRokNumber(typeof raw === "number" ? String(raw) : raw);
+        if (n != null) autofillNormalized[k] = n;
+      }
+      for (const k of DRIFT_WATCHED_SPEEDUPS) {
+        const raw = data.ocrAutofill[k];
+        if (raw == null) continue;
+        const m = parseRokDuration(
+          typeof raw === "number" ? String(raw) : raw,
+        );
+        if (m != null) autofillNormalized[k] = m;
+      }
+    }
     const { score, tags } = computeScore({
       accountBornAt: accountBornAtDate,
       vipLevel: data.vipLevel,
@@ -123,16 +147,19 @@ export async function POST(request: Request) {
         overallScore: score,
         tags: tags as unknown as Prisma.InputJsonValue,
 
-        prevKvkPower: data.prevKvkPower ?? null,
         prevKvkKillPoints: data.prevKvkKillPoints ?? null,
         prevKvkT4Kills: data.prevKvkT4Kills ?? null,
         prevKvkT5Kills: data.prevKvkT5Kills ?? null,
         prevKvkDeaths: data.prevKvkDeaths ?? null,
-        prevKvkPowerN: normalized.prevKvkPowerN,
         prevKvkKillPointsN: normalized.prevKvkKillPointsN,
         prevKvkT4KillsN: normalized.prevKvkT4KillsN,
         prevKvkT5KillsN: normalized.prevKvkT5KillsN,
         prevKvkDeathsN: normalized.prevKvkDeathsN,
+
+        ocrAutofill:
+          Object.keys(autofillNormalized).length > 0
+            ? (autofillNormalized as unknown as Prisma.InputJsonValue)
+            : Prisma.JsonNull,
 
         marches: data.marches ?? null,
         equipmentSummary:
