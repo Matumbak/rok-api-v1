@@ -106,9 +106,23 @@ export interface ParsedRokScreen {
   speedupsTraining: string | null;
   speedupsHealing: string | null;
   speedupsUniversal: string | null;
+  /**
+   * True iff the screen is a commander-profile screen for the starter
+   * Scout/Skirmisher (the 3-star Advanced archer everyone gets within
+   * the first ~2 minutes of an account). Used to derive the account's
+   * birth date — any other commander could have been recruited months
+   * later, so we explicitly reject them here.
+   */
+  isScoutCommander: boolean | null;
+  /**
+   * ISO calendar date (YYYY-MM-DD) of the Scout's recruitment, taken
+   * from the "Дата найма" / "Recruit Date" / "Hire Date" line. Always
+   * null unless `isScoutCommander` is true.
+   */
+  accountBornAt: string | null;
 }
 
-const PARSED_KEYS = [
+const PARSED_STRING_KEYS = [
   "governorId",
   "nickname",
   "power",
@@ -130,6 +144,7 @@ const PARSED_KEYS = [
   "speedupsTraining",
   "speedupsHealing",
   "speedupsUniversal",
+  "accountBornAt",
 ] as const;
 
 /**
@@ -138,7 +153,7 @@ const PARSED_KEYS = [
  * for numeric fields even when prompted for strings — `preprocess`
  * lets us salvage those without bouncing the whole response.
  */
-const fieldSchema = z.preprocess((v) => {
+const stringFieldSchema = z.preprocess((v) => {
   if (v == null) return null;
   if (typeof v === "string") return v;
   if (typeof v === "number" || typeof v === "boolean") return String(v);
@@ -147,12 +162,25 @@ const fieldSchema = z.preprocess((v) => {
   return null;
 }, z.string().nullable());
 
-const responseSchema = z.object(
-  Object.fromEntries(PARSED_KEYS.map((k) => [k, fieldSchema])) as Record<
-    (typeof PARSED_KEYS)[number],
-    typeof fieldSchema
-  >,
-);
+/** Boolean-ish coercion — models sometimes emit "true"/"false" strings. */
+const boolFieldSchema = z.preprocess((v) => {
+  if (v == null) return null;
+  if (typeof v === "boolean") return v;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (s === "true" || s === "yes" || s === "1") return true;
+    if (s === "false" || s === "no" || s === "0") return false;
+  }
+  if (typeof v === "number") return v !== 0;
+  return null;
+}, z.boolean().nullable());
+
+const responseSchema = z.object({
+  ...(Object.fromEntries(
+    PARSED_STRING_KEYS.map((k) => [k, stringFieldSchema]),
+  ) as Record<(typeof PARSED_STRING_KEYS)[number], typeof stringFieldSchema>),
+  isScoutCommander: boolFieldSchema,
+});
 
 const SYSTEM_PROMPT = `You are an OCR for Rise of Kingdoms (RoK) governor screenshots.
 The image shows ONE primary screen. Identify which screen it is, then
@@ -187,7 +215,64 @@ Screen routing — fill ONLY the listed fields per screen:
        speedupsHealing, speedupsUniversal
      Universal is the row labelled simply "Ускорение" / "Speedup".
 
-  6. ANY OTHER SCREEN → all fields null.
+  6. COMMANDER PROFILE — A single-commander info card with a portrait,
+     a header naming the commander, a star/rarity bar, and rows like
+     "Дата найма" / "Recruit Date" / "Hired" plus kills, rarity, etc.
+     This is the ONLY screen on which isScoutCommander and
+     accountBornAt may be non-null.
+
+     Fill ONLY:
+       isScoutCommander (boolean), accountBornAt (ISO date string).
+
+     Set isScoutCommander = true ONLY if BOTH conditions hold:
+       (a) The commander NAME matches the Skirmisher/Scout multilingual
+           whitelist below (case-insensitive, accent-insensitive,
+           tolerate up to 1 OCR slip). Match the commander NAME from
+           the header — NOT the unit-type or specialty subtitle.
+       (b) The portrait shows the Scout's distinct appearance: a young
+           dark-skinned woman with hair tied up, wielding a longbow,
+           wearing brown leather light armor with a short skirt and
+           leather boots. Standing pose, bow drawn or held at her side.
+           If the portrait is anyone else (a man, a different woman,
+           an armored knight, anyone holding a sword/spear/staff/etc),
+           she is NOT the Scout — return false.
+
+     Star rating and rarity DO NOT matter — players upgrade Scout from
+     3-star Advanced up to 6-star Legendary, and the date stays valid
+     regardless. Match only on name + portrait appearance.
+
+     Skirmisher/Scout commander name whitelist (any of):
+       English        : Scout, Skirmisher
+       Russian        : Застрельщица, Застрельщик
+       Spanish        : Tirador, Tiradora
+       Portuguese     : Atirador, Atiradora
+       French         : Tirailleur, Tirailleuse
+       Italian        : Tiratore, Tiratrice
+       German         : Plänkler, Plänklerin, Schütze
+       Dutch          : Schermutselaar
+       Polish         : Harcownik, Harcownica
+       Turkish        : Avcı, Akıncı
+       Vietnamese     : Lính Bắn Tỉa, Trinh Sát
+       Indonesian     : Penembak, Pengintai
+       Thai           : นักธนู, นักรบประชิด
+       Japanese       : 散兵, 斥候, スカウト
+       Korean         : 척후병, 산병, 정찰병
+       Chinese (CN/TW): 散兵, 侦察兵, 偵察兵
+       Arabic         : المناوش, الكشاف
+
+     If the commander on screen is anything else (Sun Tzu, Joan,
+     Yi Seong-Gye, Constance, etc), set isScoutCommander = false and
+     accountBornAt = null. Do NOT guess. Better to return false than
+     to falsely accept a different commander.
+
+     accountBornAt format: convert the recruit-date row from the
+     in-game format "YYYY/M/D HH:MM" (or whatever locale order shows)
+     to ISO calendar date "YYYY-MM-DD". Drop the time component.
+     Examples: "2026/2/7 23:16" → "2026-02-07",
+               "07.02.2026 23:16" → "2026-02-07",
+               "Feb 7, 2026" → "2026-02-07".
+
+  7. ANY OTHER SCREEN → all fields null.
 
 Field guide (formats):
 - governorId: numeric ID following "Правитель" / "Governor" — usually
@@ -203,17 +288,25 @@ Field guide (formats):
 - vipLevel: a small integer as string ("14").
 - speedups: duration string in English short form, omit zero units:
   "63d 12h 20m", "5h", "20m". Universal can be "340d 18h 56m".
+- isScoutCommander: a JSON boolean (true/false), not a string.
+- accountBornAt: ISO calendar date string "YYYY-MM-DD" or null.
 
 Output requirements:
 - Respond with EXACTLY ONE JSON object.
 - Every field MUST be present as a key. Missing → null, not absent.
 - All numeric fields are strings, never JSON numbers.
+- isScoutCommander is the ONLY boolean field; everything else is
+  string-or-null.
 - No commentary, no markdown code fences. Just the raw JSON.`;
 
 function emptyResult(): ParsedRokScreen {
-  return Object.fromEntries(
-    PARSED_KEYS.map((k) => [k, null]),
-  ) as unknown as ParsedRokScreen;
+  const stringFields = Object.fromEntries(
+    PARSED_STRING_KEYS.map((k) => [k, null]),
+  );
+  return {
+    ...stringFields,
+    isScoutCommander: null,
+  } as unknown as ParsedRokScreen;
 }
 
 function stripCodeFences(s: string): string {

@@ -200,6 +200,34 @@ model MigrationApplication {
   /// admin can re-parse / debug if a field looks wrong.
   ocrRawText        String?
 
+  /// Account birth date — derived from the starter Scout commander's
+  /// "Recruit Date" via OCR (the Scout is auto-given to every player
+  /// within ~2 minutes of account creation, so its hire date == the
+  /// account creation date). Null if no Scout screenshot was provided
+  /// or the screen failed verification.
+  accountBornAt     DateTime?
+  /// True iff a submitted commander screenshot was successfully verified
+  /// as the Scout. Distinct from `accountBornAt != null` because we want
+  /// to surface "applicant uploaded the wrong commander" in admin even
+  /// if a date couldn't be parsed off the verified screen.
+  scoutVerified     Boolean   @default(false)
+
+  /// Self-declared spending bracket. One of: "f2p" | "low" | "mid" |
+  /// "high" | "whale" | "kraken". Required on every new submission;
+  /// nullable in DB only because Prisma needs a column-level default
+  /// or NULLability to add it without a write-time backfill.
+  spendingTier      String?
+
+  /// Cached overall score (0..100) recomputed on every write. Null only
+  /// on records that pre-date the scoring engine (legacy seed data).
+  overallScore      Float?
+  /// Auto-derived tag slugs (e.g. ["veteran", "active-fighter",
+  /// "f2p-hero", "top-5pct"]). Recomputed on every write.
+  tags              Json?
+  /// Officer-added free-form tag slugs. Lives separately from auto
+  /// `tags` so an admin's curated list survives every recompute.
+  manualTags        Json?
+
   /// Number of marches the applicant can field at once. Manual input —
   /// officers eyeball commanders / equipment from the screenshots.
   marches           Int?

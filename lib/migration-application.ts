@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SPENDING_TIERS } from "@/lib/scoring";
 
 /** Categories the form sends — purely advisory, stored alongside each blob. */
 export const SCREENSHOT_CATEGORIES = [
@@ -6,6 +7,10 @@ export const SCREENSHOT_CATEGORIES = [
   "commander",
   "resource",
   "dkp",
+  /// Starter Scout commander screen — sole input the OCR uses to derive
+  /// `accountBornAt`. Kept as its own category so admin can see at a
+  /// glance whether the applicant uploaded the right thing.
+  "verification",
   "other",
 ] as const;
 
@@ -78,6 +83,21 @@ export const submitSchema = z.object({
 
   speedupsMinutes: z.string().max(20).optional().nullable(),
   speedupsBreakdown: z.record(z.string(), z.string()).optional().nullable(),
+
+  /// ISO calendar date "YYYY-MM-DD" extracted from the Scout commander's
+  /// recruit date — the account's birth day. Server stores as DateTime
+  /// at UTC midnight.
+  accountBornAt: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD")
+    .optional()
+    .nullable(),
+  /// Mirror of the OCR's `isScoutCommander` flag. True iff at least one
+  /// uploaded commander screenshot was confirmed as the starter Scout.
+  scoutVerified: z.boolean().optional().nullable(),
+
+  /// Self-declared spend bracket — required on every new submission.
+  spendingTier: z.enum(SPENDING_TIERS as unknown as [string, ...string[]]),
 
   marches: z.number().int().min(0).max(20).optional().nullable(),
   equipmentSummary: z.record(z.string(), z.string()).optional().nullable(),

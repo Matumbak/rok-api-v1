@@ -10,6 +10,7 @@ import {
 } from "@/lib/migration-application";
 import { parseRokNumber } from "@/lib/parse-rok-number";
 import { parseRokDuration } from "@/lib/parse-rok-duration";
+import { computeScore, type SpendingTier } from "@/lib/scoring";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,6 +56,19 @@ export async function POST(request: Request) {
     const speedupsMinutesTotal = anyParsed
       ? grandTotal
       : legacyTotal;
+
+    const accountBornAtDate = data.accountBornAt
+      ? new Date(`${data.accountBornAt}T00:00:00.000Z`)
+      : null;
+    const { score, tags } = computeScore({
+      accountBornAt: accountBornAtDate,
+      vipLevel: data.vipLevel,
+      powerN: normalized.powerN,
+      killPointsN: normalized.killPointsN,
+      deathsN: normalized.deathsN,
+      maxValorPointsN: normalized.maxValorPointsN,
+      spendingTier: data.spendingTier as SpendingTier,
+    });
 
     const created = await prisma.migrationApplication.create({
       data: {
@@ -102,6 +116,13 @@ export async function POST(request: Request) {
           data.speedupsBreakdown == null
             ? Prisma.JsonNull
             : (data.speedupsBreakdown as Prisma.InputJsonValue),
+
+        accountBornAt: accountBornAtDate,
+        scoutVerified: data.scoutVerified ?? false,
+
+        spendingTier: data.spendingTier,
+        overallScore: score,
+        tags: tags as unknown as Prisma.InputJsonValue,
 
         marches: data.marches ?? null,
         equipmentSummary:

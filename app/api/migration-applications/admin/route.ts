@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { withCors } from "@/lib/cors";
 import { STATUSES } from "@/lib/migration-application";
+import { getCohortPercentiles } from "@/lib/percentiles";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,6 +56,8 @@ const SORTABLE_COLUMNS = new Set([
   "speedupsResearchMinutes",
   "speedupsTrainingMinutes",
   "speedupsHealingMinutes",
+  "overallScore",
+  "accountBornAt",
   ...Object.values(SORT_ALIAS),
   ...Object.keys(SORT_ALIAS),
 ]);
@@ -139,6 +142,33 @@ export async function GET(request: Request) {
     }
     if (sp.get("hasScrolls") === "true") where.hasScrolls = true;
 
+    // Score floor — admin shortcut to filter out the bottom of the pack.
+    const scoreMin = sp.get("scoreMin");
+    if (scoreMin != null) {
+      const n = Number.parseFloat(scoreMin);
+      if (Number.isFinite(n)) where.overallScore = { gte: n };
+    }
+
+    // Tag inclusion: ?tag=veteran&tag=f2p-hero (any-of). Postgres JSON
+    // array_contains on the auto `tags` column. Manual tags are
+    // separate on purpose — see schema.
+    const tagAny = sp.getAll("tag");
+    if (tagAny.length > 0) {
+      where.OR = [
+        ...((where.OR as Prisma.MigrationApplicationWhereInput[]) ?? []),
+        ...tagAny.map<Prisma.MigrationApplicationWhereInput>((t) => ({
+          tags: { array_contains: [t] },
+        })),
+      ];
+    }
+
+    // Spending tier filter — ?spendingTier=f2p,kraken
+    const tierParam = sp.get("spendingTier");
+    if (tierParam) {
+      const tiers = tierParam.split(",").map((s) => s.trim()).filter(Boolean);
+      if (tiers.length > 0) where.spendingTier = { in: tiers };
+    }
+
     // Marches Int range — separate from the *N Float aliases.
     const marchesMin = sp.get("marchesMin");
     const marchesMax = sp.get("marchesMax");
@@ -221,6 +251,12 @@ export async function GET(request: Request) {
           valorPointsN: true,
           maxValorPointsN: true,
           speedupsMinutes: true,
+          accountBornAt: true,
+          scoutVerified: true,
+          spendingTier: true,
+          overallScore: true,
+          tags: true,
+          manualTags: true,
         },
       }),
       prisma.migrationApplication.groupBy({
@@ -233,10 +269,19 @@ export async function GET(request: Request) {
       statusCounts.map((c) => [c.status, c._count._all]),
     );
 
+    // Decorate each item with its percentile bands. We do one cohort
+    // query (the active pending+approved set) and join in memory —
+    // cheaper than a window-function query per row.
+    const cohortPctMap = await getCohortPercentiles();
+    const itemsWithPct = items.map((it) => ({
+      ...it,
+      percentiles: cohortPctMap.get(it.id) ?? null,
+    }));
+
     return withCors(
       request,
       NextResponse.json({
-        items,
+        items: itemsWithPct,
         total,
         page,
         pageSize,

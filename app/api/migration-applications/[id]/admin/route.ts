@@ -14,6 +14,13 @@ import {
 } from "@/lib/migration-application";
 import { parseRokNumber } from "@/lib/parse-rok-number";
 import { parseRokDuration } from "@/lib/parse-rok-duration";
+import {
+  computeScore,
+  percentileTag,
+  SPENDING_TIERS,
+  type SpendingTier,
+} from "@/lib/scoring";
+import { getPercentilesForApp } from "@/lib/percentiles";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -61,6 +68,16 @@ const patchSchema = z
     speedupsHealing: z.string().max(40).optional().nullable(),
     speedupsMinutes: z.number().int().nonnegative().optional().nullable(),
     speedupsBreakdown: z.record(z.string(), z.string()).optional().nullable(),
+    accountBornAt: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD")
+      .optional()
+      .nullable(),
+    scoutVerified: z.boolean().optional(),
+    spendingTier: z
+      .enum(SPENDING_TIERS as unknown as [string, ...string[]])
+      .optional(),
+    manualTags: z.array(z.string().min(1).max(40)).max(20).optional().nullable(),
     marches: z.number().int().min(0).max(20).optional().nullable(),
     equipmentSummary: z.record(z.string(), z.string()).optional().nullable(),
     previousKvkDkp: z.string().max(40).optional().nullable(),
@@ -107,7 +124,11 @@ export async function GET(
         NextResponse.json({ error: "not_found" }, { status: 404 }),
       );
     }
-    return withCors(request, NextResponse.json(item));
+    const percentiles = await getPercentilesForApp(id);
+    return withCors(
+      request,
+      NextResponse.json({ ...item, percentiles }),
+    );
   } catch (err) {
     return withCors(
       request,
@@ -200,6 +221,17 @@ export async function PATCH(
     if ("speedupsMinutes" in patch) data.speedupsMinutes = patch.speedupsMinutes ?? null;
     if ("marches" in patch) data.marches = patch.marches ?? null;
     if ("ocrRawText" in patch) data.ocrRawText = patch.ocrRawText ?? null;
+    if ("accountBornAt" in patch) {
+      data.accountBornAt = patch.accountBornAt
+        ? new Date(`${patch.accountBornAt}T00:00:00.000Z`)
+        : null;
+    }
+    if ("scoutVerified" in patch) data.scoutVerified = patch.scoutVerified ?? false;
+    if ("spendingTier" in patch) data.spendingTier = patch.spendingTier;
+    if ("manualTags" in patch) {
+      data.manualTags = (patch.manualTags ??
+        Prisma.JsonNull) as Prisma.InputJsonValue;
+    }
 
     // Recompute normalized columns whenever the source string is touched.
     for (const [raw, normCol] of Object.entries(NORMALIZED_FIELD_MAP)) {
@@ -273,6 +305,74 @@ export async function PATCH(
     if ("equipmentSummary" in patch) {
       data.equipmentSummary = (patch.equipmentSummary ??
         Prisma.JsonNull) as Prisma.InputJsonValue;
+    }
+
+    // Recompute score+tags if any scoring input changed. We pull the
+    // post-patch projection — touched fields come from `data`, the
+    // rest from the existing row — so the recompute reflects exactly
+    // what's about to be persisted.
+    const SCORE_INPUT_FIELDS = [
+      "vipLevel",
+      "power",
+      "killPoints",
+      "deaths",
+      "maxValorPoints",
+      "accountBornAt",
+      "spendingTier",
+    ] as const;
+    const scoringDirty = SCORE_INPUT_FIELDS.some((f) => f in patch);
+    if (scoringDirty) {
+      const current = await prisma.migrationApplication.findUnique({
+        where: { id },
+        select: {
+          vipLevel: true,
+          accountBornAt: true,
+          spendingTier: true,
+          powerN: true,
+          killPointsN: true,
+          deathsN: true,
+          maxValorPointsN: true,
+        },
+      });
+      const merged = {
+        vipLevel:
+          (data.vipLevel as string | null | undefined) ??
+          current?.vipLevel ??
+          "",
+        accountBornAt:
+          (data.accountBornAt as Date | null | undefined) ??
+          current?.accountBornAt ??
+          null,
+        spendingTier:
+          (data.spendingTier as string | null | undefined) ??
+          current?.spendingTier ??
+          null,
+        powerN:
+          (data.powerN as number | null | undefined) ?? current?.powerN ?? null,
+        killPointsN:
+          (data.killPointsN as number | null | undefined) ??
+          current?.killPointsN ??
+          null,
+        deathsN:
+          (data.deathsN as number | null | undefined) ??
+          current?.deathsN ??
+          null,
+        maxValorPointsN:
+          (data.maxValorPointsN as number | null | undefined) ??
+          current?.maxValorPointsN ??
+          null,
+      };
+      const { score, tags } = computeScore({
+        accountBornAt: merged.accountBornAt,
+        vipLevel: merged.vipLevel ?? "",
+        powerN: merged.powerN,
+        killPointsN: merged.killPointsN,
+        deathsN: merged.deathsN,
+        maxValorPointsN: merged.maxValorPointsN,
+        spendingTier: merged.spendingTier as SpendingTier | null,
+      });
+      data.overallScore = score;
+      data.tags = tags as unknown as Prisma.InputJsonValue;
     }
 
     let archivedNow = false;
