@@ -163,6 +163,22 @@ model MigrationApplication {
   speedupsResearchMinutes      Int?
   speedupsTrainingMinutes      Int?
   speedupsHealingMinutes       Int?
+  /// Per-KvK stats — populated from a DKP-scan row uploaded with the
+  /// migration form. Distinct from the account-wide power/killPoints/
+  /// t4Kills/etc. above: a DKP scan reflects what was achieved DURING
+  /// the last KvK only. We keep them on separate columns so admin can
+  /// compare "what they did last cycle" against "what they bring now".
+  prevKvkPower         String?
+  prevKvkKillPoints    String?
+  prevKvkT4Kills       String?
+  prevKvkT5Kills       String?
+  prevKvkDeaths        String?
+  prevKvkPowerN        Float?
+  prevKvkKillPointsN   Float?
+  prevKvkT4KillsN      Float?
+  prevKvkT5KillsN      Float?
+  prevKvkDeathsN       Float?
+
   /// Object holding any extra speedup categories the parser didn't recognize
   /// (event speedups, KvK speedups, etc.). Free-form by design.
   speedupsBreakdown Json?

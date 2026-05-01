@@ -123,6 +123,17 @@ export async function POST(request: Request) {
         overallScore: score,
         tags: tags as unknown as Prisma.InputJsonValue,
 
+        prevKvkPower: data.prevKvkPower ?? null,
+        prevKvkKillPoints: data.prevKvkKillPoints ?? null,
+        prevKvkT4Kills: data.prevKvkT4Kills ?? null,
+        prevKvkT5Kills: data.prevKvkT5Kills ?? null,
+        prevKvkDeaths: data.prevKvkDeaths ?? null,
+        prevKvkPowerN: normalized.prevKvkPowerN,
+        prevKvkKillPointsN: normalized.prevKvkKillPointsN,
+        prevKvkT4KillsN: normalized.prevKvkT4KillsN,
+        prevKvkT5KillsN: normalized.prevKvkT5KillsN,
+        prevKvkDeathsN: normalized.prevKvkDeathsN,
+
         marches: data.marches ?? null,
         equipmentSummary:
           data.equipmentSummary == null

@@ -83,6 +83,14 @@ export const submitSchema = z.object({
   speedupsMinutes: z.string().max(20).optional().nullable(),
   speedupsBreakdown: z.record(z.string(), z.string()).optional().nullable(),
 
+  /// Per-KvK stats from the applicant's DKP scan. Distinct from the
+  /// account-wide power/killPoints/etc. — these reflect last KvK only.
+  prevKvkPower: z.string().max(40).optional().nullable(),
+  prevKvkKillPoints: z.string().max(40).optional().nullable(),
+  prevKvkT4Kills: z.string().max(40).optional().nullable(),
+  prevKvkT5Kills: z.string().max(40).optional().nullable(),
+  prevKvkDeaths: z.string().max(40).optional().nullable(),
+
   /// ISO calendar date "YYYY-MM-DD" extracted from the Scout commander's
   /// recruit date — the account's birth day. Server stores as DateTime
   /// at UTC midnight.
@@ -144,6 +152,11 @@ export const NORMALIZED_FIELD_MAP: Record<string, string> = {
   arkOsirisWins: "arkOsirisWinsN",
   valorPoints: "valorPointsN",
   maxValorPoints: "maxValorPointsN",
+  prevKvkPower: "prevKvkPowerN",
+  prevKvkKillPoints: "prevKvkKillPointsN",
+  prevKvkT4Kills: "prevKvkT4KillsN",
+  prevKvkT5Kills: "prevKvkT5KillsN",
+  prevKvkDeaths: "prevKvkDeathsN",
 };
 
 /**

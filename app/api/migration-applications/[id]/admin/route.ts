@@ -67,6 +67,11 @@ const patchSchema = z
     speedupsHealing: z.string().max(40).optional().nullable(),
     speedupsMinutes: z.number().int().nonnegative().optional().nullable(),
     speedupsBreakdown: z.record(z.string(), z.string()).optional().nullable(),
+    prevKvkPower: z.string().max(40).optional().nullable(),
+    prevKvkKillPoints: z.string().max(40).optional().nullable(),
+    prevKvkT4Kills: z.string().max(40).optional().nullable(),
+    prevKvkT5Kills: z.string().max(40).optional().nullable(),
+    prevKvkDeaths: z.string().max(40).optional().nullable(),
     accountBornAt: z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD")
@@ -206,6 +211,11 @@ export async function PATCH(
       "stone",
       "gold",
       "previousKvkDkp",
+      "prevKvkPower",
+      "prevKvkKillPoints",
+      "prevKvkT4Kills",
+      "prevKvkT5Kills",
+      "prevKvkDeaths",
       "activityHours",
       "timezone",
       "reason",
