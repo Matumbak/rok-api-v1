@@ -47,13 +47,43 @@ export const SCORING_PROFILES: ScoringProfile[] = [
 ];
 
 /**
- * Default profile for new submissions. Pinned to `lost-kingdom` until
- * kingdom 4028 progresses to Season of Conquest (estimated mid-2026
- * per opening date ~Jan-2026 + standard ~6mo LK timeline). Flip this
- * constant — or set `scoringProfile` on individual applications via
- * admin PATCH — when SoC starts.
+ * Fallback profile when neither an explicit override nor a usable
+ * `accountBornAt` is available. The actual profile is normally
+ * inferred from account age — see `inferProfile()`. This constant is
+ * the last-resort default for legacy applications without a Scout
+ * verification.
  */
 export const DEFAULT_PROFILE: ScoringProfile = "lost-kingdom";
+
+/**
+ * Account age threshold (months) above which an applicant is assumed
+ * to have participated in Season of Conquest. Derived from the
+ * standard kingdom timeline: KvK1 starts ~day 85–105, each LK season
+ * lasts 50 days, KvK4 ends around month 13–15, then SoC. An account
+ * older than 12 months has almost certainly been through at least
+ * KvK4, often into early SoC chapters.
+ *
+ * Sources: rok.guide, riseofkingdomsguides.com, RoK Wiki Lost Kingdom
+ * Chronicles. See `rok/research/rok-account-scoring-2026-05.md` for
+ * the full timeline breakdown.
+ */
+export const SOC_ACCOUNT_AGE_THRESHOLD_MONTHS = 12;
+
+/**
+ * Pick a scoring profile based on account age. Older account = more
+ * likely to have SoC stats; younger = LK-only. Caller can override
+ * with explicit `scoringProfile` on the input — admin can flip it
+ * per-applicant via PATCH if the inference is wrong (e.g. a "restart
+ * project" applicant whose Scout date is fresh but who claims SoC
+ * experience from a prior account).
+ */
+export function inferProfile(accountBornAt: Date | null): ScoringProfile {
+  if (!accountBornAt) return DEFAULT_PROFILE;
+  const months = ageMonthsFromDate(accountBornAt);
+  return months >= SOC_ACCOUNT_AGE_THRESHOLD_MONTHS
+    ? "season-of-conquest"
+    : "lost-kingdom";
+}
 
 interface ProfilePivots {
   agePivotMonths: number;
@@ -165,7 +195,7 @@ function logScore(value: number | null | undefined, pivot: number): number {
   return Math.max(0, Math.min(1, Math.log10(value + 1) / Math.log10(pivot + 1)));
 }
 
-function ageMonths(born: Date | null): number {
+function ageMonthsFromDate(born: Date | null): number {
   if (!born) return 0;
   const now = new Date();
   let m =
@@ -246,10 +276,15 @@ function computePrevKvkDkp(
  * need cohort context.
  */
 export function computeScore(input: ScoreInputs): ScoreResult {
-  const profile = input.scoringProfile ?? DEFAULT_PROFILE;
+  // Profile selection cascade:
+  //   1. explicit override (admin PATCH)
+  //   2. inferred from account age (≥12mo → SoC, else LK)
+  //   3. fallback DEFAULT_PROFILE
+  const profile =
+    input.scoringProfile ?? inferProfile(input.accountBornAt);
   const pivots = PROFILES[profile];
 
-  const months = ageMonths(input.accountBornAt);
+  const months = ageMonthsFromDate(input.accountBornAt);
   const vip = Number.parseInt(input.vipLevel, 10);
 
   // ---------------- positive components ----------------
