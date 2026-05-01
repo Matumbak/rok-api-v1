@@ -20,6 +20,7 @@ import { parseRokNumber } from "@/lib/parse-rok-number";
 import { parseRokDuration } from "@/lib/parse-rok-duration";
 import {
   computeScore,
+  inferProfile,
   percentileTag,
   SCORING_PROFILES,
   SPENDING_TIERS,
@@ -247,6 +248,19 @@ export async function GET(
       spendingTier: item.spendingTier as SpendingTier | null,
       scoringProfile: item.scoringProfile as ScoringProfile | null,
     });
+    // The PROFILE the score was actually computed on. When `scoringProfile`
+    // is null in DB we fall back to age-based inference; admin needs to
+    // see the EFFECTIVE choice, not the raw null, otherwise the UI shows
+    // "Lost Kingdom" active for a 21mo veteran whose score was already
+    // computed on SoC pivots.
+    const effectiveProfile: ScoringProfile =
+      (item.scoringProfile as ScoringProfile | null) ??
+      inferProfile(item.accountBornAt);
+    // Tells admin whether the toggle should be locked: auto-inferred
+    // SoC (no manual override + ≥12mo account) shouldn't be switchable
+    // to LK — the inference is data-driven.
+    const profileAutoInferred = item.scoringProfile == null;
+
     return withCors(
       request,
       NextResponse.json({
@@ -255,6 +269,8 @@ export async function GET(
         driftFlags,
         prevKvkDkpComputed,
         scoreBreakdown: recomputed.breakdown,
+        effectiveProfile,
+        profileAutoInferred,
       }),
     );
   } catch (err) {
