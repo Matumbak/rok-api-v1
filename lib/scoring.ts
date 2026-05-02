@@ -13,11 +13,9 @@
  * explicit override is set on the application.
  *
  * Curve: piecewise-linear with 4 anchors per stat (p50/p80/p95/p99).
- * Replaces the old log10 curve which saturated mid-whales at 95+ and
- * left no headroom for genuine top-1% accounts. Anchors are calibrated
- * against marketplace listings (Eldorado, U7Buy, FunPay, Zeusx),
- * top-kingdom rankings (riseofstats, rokboard), and Devish19-class
- * top-1% references — see the research note in
+ * Anchors calibrated against marketplace listings (Eldorado, U7Buy,
+ * FunPay, Zeusx), top-kingdom rankings (riseofstats, rokboard), and
+ * Devish19-class top-1% references — see
  * `obsidian/rok/research/rok-account-scoring-2026-05.md`.
  *
  * Calibration targets:
@@ -26,6 +24,15 @@
  *   p95 (top whale)            → 90 pts (~88 total)
  *   p99 (genuine top-1%)       → 96 pts (~94 total)
  *   above p99                  → asymptote to 100 (~96 total)
+ *
+ * Spending tier as expectations divisor. The applicant's self-claimed
+ * tier sets how much output we expect for each $/month band. Stats are
+ * divided by the tier multiplier before piecewise scoring — F2P at 1.7B
+ * LK KP scores top of the curve, a kraken at the same 1.7B scores p50
+ * because peak krakens do 4-5B per single LK KvK / 40B per SoC mega-kvk
+ * (riseofstats imperial top-1, ~$5k/mo segment). Tier is self-reported
+ * with no spend proof, so the formula effectively says "you claim X,
+ * prove it with stats; if not, your score reflects underperformance."
  */
 
 export type SpendingTier =
@@ -125,8 +132,7 @@ const PROFILES: Record<ScoringProfile, ProfilePivots> = {
   },
 };
 
-/** Component caps (max pts). Sum to 100 minus headroom for spending
- *  modifier (±5) and sanity penalties. */
+/** Component caps (max pts). Sum to 100; headroom for sanity penalties. */
 const CAPS = {
   age: 12,
   vip: 8,
@@ -136,6 +142,41 @@ const CAPS = {
   valor: 10,
   t5Kills: 12,
   prevKvkDkp: 8,
+};
+
+/** Per-stat tier expectation multipliers. Each stat scales with $/mo
+ *  differently. Divisors are calibrated so that a tier-CLAIM with
+ *  proportional output for the *median* of that tier scores ~75-85,
+ *  and top-end of the tier breaches asymptote and scores 95+. A claim
+ *  WITHOUT proportional output (Matumba-1.7B-as-kraken) still drops
+ *  to single digits via sanity-tag stacking + below-p50 stat values.
+ *
+ *  Tier reality check (from user calibration):
+ *    - kraken-claim is LEGITIMATELY a top-tier player. RoK ratusha
+ *      tier added at $500K lifetime spend on a single character;
+ *      established SoC krakens close that. Mid-kraken (just entering
+ *      a season) ~$200K. Top imperial kraken ~$1K/day = $30K/mo.
+ *    - A relocated kraken brings full T5 in 5 cults, capped equipment,
+ *      4-5 fully geared marches — so output expectations match the
+ *      actual lived experience, not "vague spend tier".
+ *
+ *  Per-stat: power game-capped (kraken ~2× F2P top), KP highly
+ *  multiplicative (~6× kraken), deaths/t5/prevDkp scale with combat
+ *  aggression, valor capped by KvK-cycle exposure.
+ *  age/vip not divided — those are time/grind. */
+const SPENDING_OUTPUT_MULTIPLIER: Record<
+  "power" | "killPoints" | "deaths" | "valor" | "t5Kills" | "prevKvkDkp",
+  Record<SpendingTier, number>
+> = {
+  // Hard-ceiling stats (population p99 ~= what krakens actually have):
+  power:      { f2p: 1.0, low: 1.05, mid: 1.10, high: 1.15, whale: 1.20, kraken: 1.30 },
+  valor:      { f2p: 1.0, low: 1.05, mid: 1.10, high: 1.15, whale: 1.20, kraken: 1.30 },
+  // Combat-aggression stats (multiplicative with $/aggression):
+  deaths:     { f2p: 1.0, low: 1.1,  mid: 1.3,  high: 1.6,  whale: 2.2,  kraken: 3.0 },
+  t5Kills:    { f2p: 1.0, low: 1.2,  mid: 1.5,  high: 2.0,  whale: 2.8,  kraken: 4.0 },
+  prevKvkDkp: { f2p: 1.0, low: 1.2,  mid: 1.5,  high: 2.0,  whale: 2.8,  kraken: 4.0 },
+  // Most spend-elastic — kraken does 6× lifetime KP via mass training:
+  killPoints: { f2p: 1.0, low: 1.3,  mid: 1.8,  high: 2.5,  whale: 4.0,  kraken: 6.0 },
 };
 
 export interface ScoreInputs {
@@ -267,7 +308,23 @@ export function computeScore(input: ScoreInputs): ScoreResult {
   const vipScore = Number.isFinite(vip)
     ? Math.min(CAPS.vip, (vip / pivots.vipPivot) * CAPS.vip)
     : 0;
-  const powerScore = piecewiseScore(input.powerN, pivots.power) * CAPS.power;
+
+  // Per-stat tier expectations divisor. F2P=1.0; kraken varies per
+  // stat (power 3.0, KP 12.0, deaths 7.0, etc).
+  const tier = input.spendingTier;
+  const adjFor = (
+    stat: keyof typeof SPENDING_OUTPUT_MULTIPLIER,
+  ) => (v: number | null | undefined): number | null => {
+    if (v == null || !Number.isFinite(v)) return null;
+    const div = tier ? SPENDING_OUTPUT_MULTIPLIER[stat][tier] : 1.0;
+    return v / div;
+  };
+  const adjPower = adjFor("power");
+  const adjKp = adjFor("killPoints");
+  const adjDeaths = adjFor("deaths");
+  const adjValor = adjFor("valor");
+  const adjT5 = adjFor("t5Kills");
+  const adjPrevDkp = adjFor("prevKvkDkp");
 
   // KP scaled by (1 - lowTierShare) — a T1-trader with inflated KP
   // gets discounted at source instead of needing a heavier penalty
@@ -280,50 +337,53 @@ export function computeScore(input: ScoreInputs): ScoreResult {
     input.t4KillsN,
     input.t5KillsN,
   );
-  const effectiveKp =
+  const effectiveKpRaw =
     input.killPointsN != null
       ? input.killPointsN * (1 - ltShareForKp)
       : null;
-  const kpScore =
-    piecewiseScore(effectiveKp, pivots.killPoints) * CAPS.killPoints;
-
-  const deathsScore =
-    piecewiseScore(input.deathsN, pivots.deaths) * CAPS.deaths;
-  const valorScore =
-    piecewiseScore(input.maxValorPointsN, pivots.valor) * CAPS.valor;
 
   // T5 absolute count (not ratio) — see prior commits for the
   // loophole rationale.
-  const t5Score =
-    piecewiseScore(input.t5KillsN, pivots.t5Kills) * CAPS.t5Kills;
-
   const prevDkp = computePrevKvkDkp(
     input.prevKvkT4KillsN,
     input.prevKvkT5KillsN,
     input.prevKvkDeathsN,
     profile,
   );
-  const prevDkpScore =
+
+  // Raw scores (F2P-equivalent — what the player would have scored if
+  // they had claimed F2P). Shown in the breakdown popover so admins
+  // can see the absolute stat contribution; the tier impact is then
+  // surfaced as a single line item.
+  const powerScoreRaw = piecewiseScore(input.powerN, pivots.power) * CAPS.power;
+  const kpScoreRaw = piecewiseScore(effectiveKpRaw, pivots.killPoints) * CAPS.killPoints;
+  const deathsScoreRaw = piecewiseScore(input.deathsN, pivots.deaths) * CAPS.deaths;
+  const valorScoreRaw = piecewiseScore(input.maxValorPointsN, pivots.valor) * CAPS.valor;
+  const t5ScoreRaw = piecewiseScore(input.t5KillsN, pivots.t5Kills) * CAPS.t5Kills;
+  const prevDkpScoreRaw =
     prevDkp != null
       ? piecewiseScore(prevDkp, pivots.prevKvkDkp) * CAPS.prevKvkDkp
       : 0;
+  const baseStatsRaw =
+    powerScoreRaw + kpScoreRaw + deathsScoreRaw + valorScoreRaw + t5ScoreRaw + prevDkpScoreRaw;
 
+  // Adjusted scores — what actually counts toward the final score.
+  // Stats divided by per-stat tier multiplier before the curve.
+  const powerScore = piecewiseScore(adjPower(input.powerN), pivots.power) * CAPS.power;
+  const kpScore = piecewiseScore(adjKp(effectiveKpRaw), pivots.killPoints) * CAPS.killPoints;
+  const deathsScore = piecewiseScore(adjDeaths(input.deathsN), pivots.deaths) * CAPS.deaths;
+  const valorScore = piecewiseScore(adjValor(input.maxValorPointsN), pivots.valor) * CAPS.valor;
+  const t5Score = piecewiseScore(adjT5(input.t5KillsN), pivots.t5Kills) * CAPS.t5Kills;
+  const prevDkpScore =
+    prevDkp != null
+      ? piecewiseScore(adjPrevDkp(prevDkp), pivots.prevKvkDkp) * CAPS.prevKvkDkp
+      : 0;
   const baseStats =
     powerScore + kpScore + deathsScore + valorScore + t5Score + prevDkpScore;
 
-  // ---------------- spending modifier (±5) ----------------
-  let spendingMod = 0;
-  if (input.spendingTier === "f2p") {
-    spendingMod = baseStats > 50 ? 5 : baseStats > 30 ? 2 : 0;
-  } else if (input.spendingTier === "low") {
-    spendingMod = baseStats > 55 ? 3 : 0;
-  } else if (
-    input.spendingTier === "kraken" ||
-    input.spendingTier === "whale"
-  ) {
-    if (baseStats < 25) spendingMod = -5;
-    else if (baseStats < 40) spendingMod = -2;
-  }
+  // Single line item showing the tier expectation impact. F2P=0,
+  // higher tiers ≤ 0 (negative when stats fall short of expectations).
+  const spendingMod = round1(baseStats - baseStatsRaw);
 
   // ---------------- sanity penalties ----------------
   const sanityTags: string[] = [];
@@ -365,13 +425,15 @@ export function computeScore(input: ScoreInputs): ScoreResult {
   }
 
   // ---------------- final score ----------------
+  // Note: baseStatsRaw + spendingMod === baseStats by construction, so
+  // the breakdown lines (raw stats + spendingMod) sum to the score.
   const ageVip = ageScore + vipScore;
-  const raw = ageVip + baseStats + spendingMod + sanityPenalty;
+  const raw = ageVip + baseStats + sanityPenalty;
   const score = Math.max(0, Math.min(100, Math.round(raw * 10) / 10));
 
   if (
     (input.spendingTier === "whale" || input.spendingTier === "kraken") &&
-    score < 40
+    score < 50
   ) {
     sanityTags.push("weak-whale");
   }
@@ -431,12 +493,12 @@ export function computeScore(input: ScoreInputs): ScoreResult {
     breakdown: {
       accountAge: round1(ageScore),
       vip: round1(vipScore),
-      power: round1(powerScore),
-      killPoints: round1(kpScore),
-      deaths: round1(deathsScore),
-      valor: round1(valorScore),
-      t5Kills: round1(t5Score),
-      prevKvkDkp: round1(prevDkpScore),
+      power: round1(powerScoreRaw),
+      killPoints: round1(kpScoreRaw),
+      deaths: round1(deathsScoreRaw),
+      valor: round1(valorScoreRaw),
+      t5Kills: round1(t5ScoreRaw),
+      prevKvkDkp: round1(prevDkpScoreRaw),
       spendingModifier: spendingMod,
       sanityPenalty,
     },
