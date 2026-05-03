@@ -290,3 +290,31 @@ model MigrationApplication {
   @@index([governorId])
   @@map("migration_applications")
 }
+
+/// Auto-learning cohort calibration. Each row holds the empirically-blended
+/// p50/p80/p95/p99 anchors for one (stage × spending_tier) cohort, derived
+/// from approved applications matching that cohort. computeScore reads
+/// from this table when present and falls back to hardcoded COHORTS otherwise.
+///
+/// Anchors = Bayesian blend of hardcoded prior + observed:
+///   effective_p99 = (PRIOR_WEIGHT × hardcoded + n × empirical) / (PRIOR_WEIGHT + n)
+///
+/// Recalibration triggers: (a) admin PATCH that flips status to "approved",
+/// (b) nightly cron `/api/cron/recompute-scores` that also re-scores all rows.
+///
+/// Cold start: with sampleCount < ~5 the row may not exist; fall back to
+/// hardcoded. Drift is unbounded by design — current hardcoded anchors are
+/// based on limited research data, so empirical observations should
+/// dominate fast.
+model ScoringCalibration {
+  /// Composite key: "<stage>:<tier>", e.g. "soc-mature:kraken".
+  cohortKey   String   @id
+  /// JSON: { power: {p50,p80,p95,p99}, killPoints: {...}, deaths: {...},
+  ///         valor: {...}, t5Kills: {...}, prevKvkDkp: {...} }
+  anchors     Json
+  /// Number of approved applications used to compute these anchors.
+  sampleCount Int
+  updatedAt   DateTime @updatedAt
+
+  @@map("scoring_calibration")
+}

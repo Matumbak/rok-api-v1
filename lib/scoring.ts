@@ -120,7 +120,7 @@ interface PiecewiseAnchors {
   p99: number;
 }
 
-interface CohortAnchors {
+export interface CohortAnchors {
   power: PiecewiseAnchors;
   killPoints: PiecewiseAnchors;
   deaths: PiecewiseAnchors;
@@ -128,6 +128,15 @@ interface CohortAnchors {
   t5Kills: PiecewiseAnchors;
   prevKvkDkp: PiecewiseAnchors;
 }
+
+/** Optional override that lets a caller swap the static COHORTS table
+ *  for empirically-blended anchors (see lib/calibration.ts). When
+ *  omitted, scoring uses the hardcoded prior — same as before this
+ *  feature existed. */
+export type CohortLookup = (
+  stage: ScoringStage,
+  tier: SpendingTier,
+) => CohortAnchors;
 
 interface StagePivots {
   agePivotMonths: number;
@@ -197,7 +206,7 @@ const PREV_KVK_DKP_WEIGHTS: Record<
  *                  SoC 10/30/80)
  */
 
-const COHORTS: Record<ScoringStage, Record<SpendingTier, CohortAnchors>> = {
+export const COHORTS: Record<ScoringStage, Record<SpendingTier, CohortAnchors>> = {
   // ─────────────────────────────────────────────────────────────────
   //  STAGE: lk-early (0-6 months) — KvK 1-2, mostly T4 phase
   //  T5 unlocks late KvK4 so cumulative T5 is small or zero.
@@ -596,11 +605,14 @@ function computePrevKvkDkp(
   return v4 * w.t4 + v5 * w.t5 + vd * w.deaths;
 }
 
-export function computeScore(input: ScoreInputs): ScoreResult {
+export function computeScore(
+  input: ScoreInputs,
+  cohortLookup?: CohortLookup,
+): ScoreResult {
   const stage = inferStage(input.accountBornAt);
   const profile = input.scoringProfile ?? inferProfile(input.accountBornAt);
   const tier = input.spendingTier ?? "f2p";
-  const cohort = COHORTS[stage][tier];
+  const cohort = cohortLookup ? cohortLookup(stage, tier) : COHORTS[stage][tier];
   const stagePivots = STAGE_PIVOTS[stage];
 
   const months = ageMonthsFromDate(input.accountBornAt);
@@ -655,7 +667,9 @@ export function computeScore(input: ScoreInputs): ScoreResult {
   //   F2P-claim with high stats: ≈ 0 (you'd score the same as F2P)
   //   Kraken-claim with weak stats: large negative (kraken anchors are
   //     much higher, so your stats place much lower in the curve)
-  const f2pCohort = COHORTS[stage]["f2p"];
+  const f2pCohort = cohortLookup
+    ? cohortLookup(stage, "f2p")
+    : COHORTS[stage]["f2p"];
   const baseStatsF2P =
     piecewiseScore(input.powerN, f2pCohort.power) * CAPS.power +
     piecewiseScore(effectiveKp, f2pCohort.killPoints) * CAPS.killPoints +

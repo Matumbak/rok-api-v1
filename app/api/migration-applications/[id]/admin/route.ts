@@ -21,12 +21,14 @@ import { parseRokDuration } from "@/lib/parse-rok-duration";
 import {
   computeScore,
   inferProfile,
+  inferStage,
   percentileTag,
   SCORING_PROFILES,
   SPENDING_TIERS,
   type ScoringProfile,
   type SpendingTier,
 } from "@/lib/scoring";
+import { loadCalibrationLookup, recalibrateCohort } from "@/lib/calibration";
 import { getPercentilesForApp } from "@/lib/percentiles";
 
 export const runtime = "nodejs";
@@ -200,6 +202,10 @@ async function enrichApplicationDetail(
   const driftFlags = computeDriftFlags(
     item as unknown as Record<string, unknown>,
   );
+  // Load empirically-blended cohort anchors. Falls back to hardcoded
+  // priors for cohorts with no calibration row yet — same as if this
+  // feature didn't exist.
+  const cohortLookup = await loadCalibrationLookup();
   // Recompute the canonical DKP for the last KvK using the active
   // profile's weights (LK 10/20/50 vs SoC 10/30/80). Lets admin
   // compare against the applicant-reported `previousKvkDkp` to
@@ -221,24 +227,27 @@ async function enrichApplicationDetail(
   // per-component "10/18" tooltip on hover. We don't persist the
   // breakdown JSON because it's deterministic from the inputs and
   // changing the formula in code would invalidate stored values.
-  const recomputed = computeScore({
-    accountBornAt: item.accountBornAt,
-    vipLevel: item.vipLevel,
-    powerN: item.powerN,
-    killPointsN: item.killPointsN,
-    t1KillsN: item.t1KillsN,
-    t2KillsN: item.t2KillsN,
-    t3KillsN: item.t3KillsN,
-    t4KillsN: item.t4KillsN,
-    t5KillsN: item.t5KillsN,
-    deathsN: item.deathsN,
-    maxValorPointsN: item.maxValorPointsN,
-    prevKvkT4KillsN: item.prevKvkT4KillsN,
-    prevKvkT5KillsN: item.prevKvkT5KillsN,
-    prevKvkDeathsN: item.prevKvkDeathsN,
-    spendingTier: item.spendingTier as SpendingTier | null,
-    scoringProfile: item.scoringProfile as ScoringProfile | null,
-  });
+  const recomputed = computeScore(
+    {
+      accountBornAt: item.accountBornAt,
+      vipLevel: item.vipLevel,
+      powerN: item.powerN,
+      killPointsN: item.killPointsN,
+      t1KillsN: item.t1KillsN,
+      t2KillsN: item.t2KillsN,
+      t3KillsN: item.t3KillsN,
+      t4KillsN: item.t4KillsN,
+      t5KillsN: item.t5KillsN,
+      deathsN: item.deathsN,
+      maxValorPointsN: item.maxValorPointsN,
+      prevKvkT4KillsN: item.prevKvkT4KillsN,
+      prevKvkT5KillsN: item.prevKvkT5KillsN,
+      prevKvkDeathsN: item.prevKvkDeathsN,
+      spendingTier: item.spendingTier as SpendingTier | null,
+      scoringProfile: item.scoringProfile as ScoringProfile | null,
+    },
+    cohortLookup,
+  );
   // The PROFILE the score was actually computed on. When `scoringProfile`
   // is null in DB we fall back to age-based inference.
   const effectiveProfile: ScoringProfile =
@@ -546,24 +555,28 @@ export async function PATCH(
         prevKvkT5KillsN: pickN("prevKvkT5KillsN"),
         prevKvkDeathsN: pickN("prevKvkDeathsN"),
       };
-      const { score, tags } = computeScore({
-        accountBornAt: merged.accountBornAt,
-        vipLevel: merged.vipLevel ?? "",
-        powerN: merged.powerN,
-        killPointsN: merged.killPointsN,
-        t1KillsN: merged.t1KillsN,
-        t2KillsN: merged.t2KillsN,
-        t3KillsN: merged.t3KillsN,
-        t4KillsN: merged.t4KillsN,
-        t5KillsN: merged.t5KillsN,
-        deathsN: merged.deathsN,
-        maxValorPointsN: merged.maxValorPointsN,
-        prevKvkT4KillsN: merged.prevKvkT4KillsN,
-        prevKvkT5KillsN: merged.prevKvkT5KillsN,
-        prevKvkDeathsN: merged.prevKvkDeathsN,
-        spendingTier: merged.spendingTier as SpendingTier | null,
-        scoringProfile: merged.scoringProfile as ScoringProfile | null,
-      });
+      const patchCohortLookup = await loadCalibrationLookup();
+      const { score, tags } = computeScore(
+        {
+          accountBornAt: merged.accountBornAt,
+          vipLevel: merged.vipLevel ?? "",
+          powerN: merged.powerN,
+          killPointsN: merged.killPointsN,
+          t1KillsN: merged.t1KillsN,
+          t2KillsN: merged.t2KillsN,
+          t3KillsN: merged.t3KillsN,
+          t4KillsN: merged.t4KillsN,
+          t5KillsN: merged.t5KillsN,
+          deathsN: merged.deathsN,
+          maxValorPointsN: merged.maxValorPointsN,
+          prevKvkT4KillsN: merged.prevKvkT4KillsN,
+          prevKvkT5KillsN: merged.prevKvkT5KillsN,
+          prevKvkDeathsN: merged.prevKvkDeathsN,
+          spendingTier: merged.spendingTier as SpendingTier | null,
+          scoringProfile: merged.scoringProfile as ScoringProfile | null,
+        },
+        patchCohortLookup,
+      );
       data.overallScore = score;
       data.tags = tags as unknown as Prisma.InputJsonValue;
     }
@@ -605,6 +618,25 @@ export async function PATCH(
           console.error("[migration-app] blob cleanup failed", err);
         }
       }
+    }
+
+    // After approval, recalibrate this applicant's cohort. Approved
+    // applications are the ONLY trust signal feeding cohort anchors —
+    // pending/rejected/archived rows don't count. Fire-and-forget: the
+    // user's PATCH response shouldn't wait for the recompute.
+    if (
+      updated.status === "approved" &&
+      existing.status !== "approved" &&
+      updated.spendingTier
+    ) {
+      const stage = inferStage(updated.accountBornAt);
+      const tier = updated.spendingTier as SpendingTier;
+      void recalibrateCohort(stage, tier).catch((err) => {
+        console.error(
+          `[calibration] recalibrateCohort(${stage},${tier}) failed`,
+          err,
+        );
+      });
     }
 
     const enriched = await enrichApplicationDetail(updated);
