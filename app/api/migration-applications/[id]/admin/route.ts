@@ -257,9 +257,16 @@ export async function GET(
       (item.scoringProfile as ScoringProfile | null) ??
       inferProfile(item.accountBornAt);
     // Tells admin whether the toggle should be locked: auto-inferred
-    // SoC (no manual override + ≥12mo account) shouldn't be switchable
+    // SoC (no manual override + ≥15mo account) shouldn't be switchable
     // to LK — the inference is data-driven.
     const profileAutoInferred = item.scoringProfile == null;
+    // The 4-stage cohort the score was actually computed against
+    // (lk-early / lk-late / soc-fresh / soc-mature). Always derived
+    // from accountBornAt — NOT user-overridable, unlike the 2-value
+    // profile pill. Admin shows this so officers see WHY a kraken-claim
+    // with weak stats is being graded so harshly: a soc-mature kraken
+    // is held to a different anchor table than an lk-early kraken.
+    const effectiveCohort = recomputed.stage;
 
     return withCors(
       request,
@@ -271,6 +278,7 @@ export async function GET(
         scoreBreakdown: recomputed.breakdown,
         effectiveProfile,
         profileAutoInferred,
+        effectiveCohort,
       }),
     );
   } catch (err) {

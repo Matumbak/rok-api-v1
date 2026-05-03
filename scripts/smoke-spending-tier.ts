@@ -70,22 +70,24 @@ const realKrakenLK = {
   scoringProfile: "lost-kingdom" as const,
 };
 
-// Lifetime-realistic SoC super-kraken: ~5 SoC seasons × ~25B = ~120B.
+// Live top-1 SoC super-kraken (calibrated to riseofstats May 2026 ranks):
+// top KP 150B, top power ~500M, top T5 cumulative ~100M, top single-KvK
+// peaks ~22M valor + ~100M T5 / 150M deaths. Account 4 years old, max VIP.
 const realKrakenSoC = {
-  accountBornAt: SOC_BORN,
-  vipLevel: "22",
-  powerN: 420_000_000,
-  killPointsN: 120_000_000_000,
-  t1KillsN: 2_000_000,
-  t2KillsN: 1_500_000,
-  t3KillsN: 1_000_000,
-  t4KillsN: 25_000_000,
-  t5KillsN: 60_000_000,
-  deathsN: 80_000_000,
-  maxValorPointsN: 32_000_000,
-  prevKvkT4KillsN: 5_000_000,
-  prevKvkT5KillsN: 25_000_000,
-  prevKvkDeathsN: 35_000_000,
+  accountBornAt: new Date("2022-05-01"),
+  vipLevel: "25",
+  powerN: 500_000_000,
+  killPointsN: 150_000_000_000,
+  t1KillsN: 3_000_000,
+  t2KillsN: 2_000_000,
+  t3KillsN: 1_500_000,
+  t4KillsN: 35_000_000,
+  t5KillsN: 100_000_000,
+  deathsN: 130_000_000,
+  maxValorPointsN: 22_000_000,
+  prevKvkT4KillsN: 20_000_000,
+  prevKvkT5KillsN: 100_000_000,
+  prevKvkDeathsN: 150_000_000,
   scoringProfile: "season-of-conquest" as const,
 };
 
@@ -109,9 +111,9 @@ function runCases(label: string, base: Omit<ScoreInputs, "spendingTier">) {
 runCases("Mediocre LK account, 1.7B KP", baseLk);
 runCases("Matumba (SoC, 1.7B KP)", matumba);
 runCases("Real LK kraken (4.3B KP, 1 KvK)", realKrakenLK);
-runCases("Real SoC super-kraken (35B KP, mega KvK)", realKrakenSoC);
+runCases("Live top-1 SoC super-kraken (150B KP, 4yr vet)", realKrakenSoC);
 
 console.log("\nExpected:");
-console.log("  - F2P+1.7B LK     → high (e.g. 80+)  current Matumba @ kraken should drop to <40");
-console.log("  - Real LK kraken  → high even claiming kraken (60-75)");
-console.log("  - Real SoC super-kraken → near 100 claiming kraken");
+console.log("  - F2P+1.7B LK              → high (e.g. 80+);  Matumba @ kraken should drop to <40");
+console.log("  - Real LK kraken (16B)     → high even claiming kraken (90+)");
+console.log("  - Live top-1 super-kraken  → ~100 claiming kraken (cohort-topper)");
