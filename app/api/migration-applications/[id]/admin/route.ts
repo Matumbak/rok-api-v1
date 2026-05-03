@@ -187,6 +187,79 @@ function computeDriftFlags(
   return flags;
 }
 
+/** Enrich a raw prisma row with the same computed fields the admin UI
+ *  expects on every GET / PATCH response: percentiles, drift flags,
+ *  recomputed score breakdown, effective profile/cohort. Centralizing
+ *  this keeps GET and PATCH responses shape-identical so the admin
+ *  client can `setApp(response)` from either without losing fields. */
+async function enrichApplicationDetail(
+  item: Awaited<ReturnType<typeof prisma.migrationApplication.findUnique>>,
+) {
+  if (!item) return null;
+  const percentiles = await getPercentilesForApp(item.id);
+  const driftFlags = computeDriftFlags(
+    item as unknown as Record<string, unknown>,
+  );
+  // Recompute the canonical DKP for the last KvK using the active
+  // profile's weights (LK 10/20/50 vs SoC 10/30/80). Lets admin
+  // compare against the applicant-reported `previousKvkDkp` to
+  // surface fudged numbers.
+  const profile = (item.scoringProfile ?? "lost-kingdom") as ScoringProfile;
+  const dkpWeights =
+    profile === "season-of-conquest"
+      ? { t4: 10, t5: 30, deaths: 80 }
+      : { t4: 10, t5: 20, deaths: 50 };
+  const prevKvkDkpComputed =
+    item.prevKvkT4KillsN != null ||
+    item.prevKvkT5KillsN != null ||
+    item.prevKvkDeathsN != null
+      ? (item.prevKvkT4KillsN ?? 0) * dkpWeights.t4 +
+        (item.prevKvkT5KillsN ?? 0) * dkpWeights.t5 +
+        (item.prevKvkDeathsN ?? 0) * dkpWeights.deaths
+      : null;
+  // Recompute the score breakdown on-the-fly so admin can render a
+  // per-component "10/18" tooltip on hover. We don't persist the
+  // breakdown JSON because it's deterministic from the inputs and
+  // changing the formula in code would invalidate stored values.
+  const recomputed = computeScore({
+    accountBornAt: item.accountBornAt,
+    vipLevel: item.vipLevel,
+    powerN: item.powerN,
+    killPointsN: item.killPointsN,
+    t1KillsN: item.t1KillsN,
+    t2KillsN: item.t2KillsN,
+    t3KillsN: item.t3KillsN,
+    t4KillsN: item.t4KillsN,
+    t5KillsN: item.t5KillsN,
+    deathsN: item.deathsN,
+    maxValorPointsN: item.maxValorPointsN,
+    prevKvkT4KillsN: item.prevKvkT4KillsN,
+    prevKvkT5KillsN: item.prevKvkT5KillsN,
+    prevKvkDeathsN: item.prevKvkDeathsN,
+    spendingTier: item.spendingTier as SpendingTier | null,
+    scoringProfile: item.scoringProfile as ScoringProfile | null,
+  });
+  // The PROFILE the score was actually computed on. When `scoringProfile`
+  // is null in DB we fall back to age-based inference.
+  const effectiveProfile: ScoringProfile =
+    (item.scoringProfile as ScoringProfile | null) ??
+    inferProfile(item.accountBornAt);
+  const profileAutoInferred = item.scoringProfile == null;
+  // 4-stage cohort always derived from accountBornAt — not overridable.
+  const effectiveCohort = recomputed.stage;
+
+  return {
+    ...item,
+    percentiles,
+    driftFlags,
+    prevKvkDkpComputed,
+    scoreBreakdown: recomputed.breakdown,
+    effectiveProfile,
+    profileAutoInferred,
+    effectiveCohort,
+  };
+}
+
 /** GET /api/migration-applications/[id]/admin — full record. */
 export async function GET(
   request: Request,
@@ -205,82 +278,8 @@ export async function GET(
         NextResponse.json({ error: "not_found" }, { status: 404 }),
       );
     }
-    const percentiles = await getPercentilesForApp(id);
-    const driftFlags = computeDriftFlags(
-      item as unknown as Record<string, unknown>,
-    );
-    // Recompute the canonical DKP for the last KvK using the active
-    // profile's weights (LK 10/20/50 vs SoC 10/30/80). Lets admin
-    // compare against the applicant-reported `previousKvkDkp` to
-    // surface fudged numbers.
-    const profile = (item.scoringProfile ?? "lost-kingdom") as ScoringProfile;
-    const dkpWeights =
-      profile === "season-of-conquest"
-        ? { t4: 10, t5: 30, deaths: 80 }
-        : { t4: 10, t5: 20, deaths: 50 };
-    const prevKvkDkpComputed =
-      item.prevKvkT4KillsN != null ||
-      item.prevKvkT5KillsN != null ||
-      item.prevKvkDeathsN != null
-        ? (item.prevKvkT4KillsN ?? 0) * dkpWeights.t4 +
-          (item.prevKvkT5KillsN ?? 0) * dkpWeights.t5 +
-          (item.prevKvkDeathsN ?? 0) * dkpWeights.deaths
-        : null;
-    // Recompute the score breakdown on-the-fly so admin can render a
-    // per-component "10/18" tooltip on hover. We don't persist the
-    // breakdown JSON because it's deterministic from the inputs and
-    // changing the formula in code would invalidate stored values.
-    const recomputed = computeScore({
-      accountBornAt: item.accountBornAt,
-      vipLevel: item.vipLevel,
-      powerN: item.powerN,
-      killPointsN: item.killPointsN,
-      t1KillsN: item.t1KillsN,
-      t2KillsN: item.t2KillsN,
-      t3KillsN: item.t3KillsN,
-      t4KillsN: item.t4KillsN,
-      t5KillsN: item.t5KillsN,
-      deathsN: item.deathsN,
-      maxValorPointsN: item.maxValorPointsN,
-      prevKvkT4KillsN: item.prevKvkT4KillsN,
-      prevKvkT5KillsN: item.prevKvkT5KillsN,
-      prevKvkDeathsN: item.prevKvkDeathsN,
-      spendingTier: item.spendingTier as SpendingTier | null,
-      scoringProfile: item.scoringProfile as ScoringProfile | null,
-    });
-    // The PROFILE the score was actually computed on. When `scoringProfile`
-    // is null in DB we fall back to age-based inference; admin needs to
-    // see the EFFECTIVE choice, not the raw null, otherwise the UI shows
-    // "Lost Kingdom" active for a 21mo veteran whose score was already
-    // computed on SoC pivots.
-    const effectiveProfile: ScoringProfile =
-      (item.scoringProfile as ScoringProfile | null) ??
-      inferProfile(item.accountBornAt);
-    // Tells admin whether the toggle should be locked: auto-inferred
-    // SoC (no manual override + ≥15mo account) shouldn't be switchable
-    // to LK — the inference is data-driven.
-    const profileAutoInferred = item.scoringProfile == null;
-    // The 4-stage cohort the score was actually computed against
-    // (lk-early / lk-late / soc-fresh / soc-mature). Always derived
-    // from accountBornAt — NOT user-overridable, unlike the 2-value
-    // profile pill. Admin shows this so officers see WHY a kraken-claim
-    // with weak stats is being graded so harshly: a soc-mature kraken
-    // is held to a different anchor table than an lk-early kraken.
-    const effectiveCohort = recomputed.stage;
-
-    return withCors(
-      request,
-      NextResponse.json({
-        ...item,
-        percentiles,
-        driftFlags,
-        prevKvkDkpComputed,
-        scoreBreakdown: recomputed.breakdown,
-        effectiveProfile,
-        profileAutoInferred,
-        effectiveCohort,
-      }),
-    );
+    const enriched = await enrichApplicationDetail(item);
+    return withCors(request, NextResponse.json(enriched));
   } catch (err) {
     return withCors(
       request,
@@ -608,7 +607,8 @@ export async function PATCH(
       }
     }
 
-    return withCors(request, NextResponse.json(updated));
+    const enriched = await enrichApplicationDetail(updated);
+    return withCors(request, NextResponse.json(enriched));
   } catch (err) {
     if (err instanceof z.ZodError) {
       return withCors(
