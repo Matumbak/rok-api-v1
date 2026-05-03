@@ -70,24 +70,25 @@ const realKrakenLK = {
   scoringProfile: "lost-kingdom" as const,
 };
 
-// Live top-1 SoC super-kraken (calibrated to riseofstats May 2026 ranks):
-// top KP 150B, top power ~500M, top T5 cumulative ~100M, top single-KvK
-// peaks ~22M valor + ~100M T5 / 150M deaths. Account 4 years old, max VIP.
+// Live top-1 SoC super-kraken (Mr hope / Wild lion / Velociraptor 1 class,
+// observed May 2026): power 1.77B current (max 3.18B), KP 127B, deaths 772M,
+// max valor 428M, T5 cumulative 5.7B, T4 1.26B. Account ~4 years old, max VIP.
 const realKrakenSoC = {
   accountBornAt: new Date("2022-05-01"),
   vipLevel: "25",
-  powerN: 500_000_000,
+  powerN: 1_770_000_000,
   killPointsN: 150_000_000_000,
-  t1KillsN: 3_000_000,
-  t2KillsN: 2_000_000,
-  t3KillsN: 1_500_000,
-  t4KillsN: 35_000_000,
-  t5KillsN: 100_000_000,
-  deathsN: 130_000_000,
-  maxValorPointsN: 22_000_000,
-  prevKvkT4KillsN: 20_000_000,
-  prevKvkT5KillsN: 100_000_000,
-  prevKvkDeathsN: 150_000_000,
+  t1KillsN: 81_000_000,
+  t2KillsN: 30_000_000,
+  t3KillsN: 20_000_000,
+  t4KillsN: 1_260_000_000,
+  t5KillsN: 5_700_000_000,
+  deathsN: 772_000_000,
+  maxValorPointsN: 500_000_000,
+  // Single mega-KvK from a top kraken: ~200M T5 + ~250M deaths in one cycle.
+  prevKvkT4KillsN: 80_000_000,
+  prevKvkT5KillsN: 200_000_000,
+  prevKvkDeathsN: 250_000_000,
   scoringProfile: "season-of-conquest" as const,
 };
 

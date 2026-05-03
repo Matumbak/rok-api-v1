@@ -161,237 +161,294 @@ const PREV_KVK_DKP_WEIGHTS: Record<
  *  =================================================================
  *  Each cohort = stage × spending tier. Anchors are p50/p80/p95/p99
  *  for what an honest player at that cohort produces. p50 = "median
- *  player at this cohort", p99 = "rare top of cohort", asymptote at
- *  4×p99 = "literally impossible".
+ *  player at this cohort", p99 = "rare top of cohort". p99 maps to
+ *  1.00 = full cap; values above clip.
+ *
+ *  Calibration sources (May 2026, RoK 4028 + cross-kingdom scouting):
+ *    Velociraptor 1 (top kingdom kraken): power 187M cur / 824M max,
+ *      KP 150B, valor max 527M, deaths 522M, T5 cumulative 6.6B,
+ *      T4 cumulative 1.7B, wins 1.83M
+ *    Mr hope (top SoC kraken): power 1.77B cur / 3.18B max, KP 127B,
+ *      valor max 428M, deaths 772M, T5 5.7B, T4 1.26B
+ *    Wild lion: power 1.77B / 3.18B max, KP 115B, valor 409M,
+ *      deaths 792M, T5 5.1B, T4 1.2B
+ *
+ *  These are the LIVE top-1 of the entire game — soc-mature kraken p99
+ *  anchors target this band. A real top-of-game player hits p99 across
+ *  the board → scores ~100/100. Other cohorts scale down by stage and
+ *  spending tier with smooth progression.
  *
  *  Calibration intent:
- *    A player whose stats match cohort p80 (good, but not exceptional)
- *    should score ~75-85 of 100. A player whose stats are a full tier
- *    BELOW their claimed cohort scores in single digits per stat, so
- *    a Matumba-type "1.7B KP claiming kraken @ SoC-mature" lands ~30.
+ *    p99 ≈ "verified live top-1 of cohort"
+ *    p95 ≈ ~70% of p99 — top-of-cohort but not literal #1
+ *    p80 ≈ ~45% of p99 — strong-cohort
+ *    p50 ≈ ~20% of p99 — median honest player at cohort
+ *
+ *  KEY SEMANTIC NOTES:
+ *    valor       = MAX VALOR EVER ACCUMULATED (lifetime peak balance,
+ *                  not single-KvK earnings — game tracks both, OCR
+ *                  captures "Макс. кол-во очк. доблести")
+ *    t5Kills     = CUMULATIVE LIFETIME T5 KILLS (not per-KvK)
+ *    deaths      = LIFETIME — SoC stages ~2× LK at same combat intensity
+ *                  because Hall of Heroes doesn't decrement the counter
+ *    power       = CURRENT (not max) — top fighters' current is often
+ *                  half of max because they bled in active KvK
+ *    prevKvkDkp  = ONE BEST KVK (T4*w + T5*w + Deaths*w; LK 10/20/50,
+ *                  SoC 10/30/80)
  */
 
 const COHORTS: Record<ScoringStage, Record<SpendingTier, CohortAnchors>> = {
   // ─────────────────────────────────────────────────────────────────
   //  STAGE: lk-early (0-6 months) — KvK 1-2, mostly T4 phase
+  //  T5 unlocks late KvK4 so cumulative T5 is small or zero.
+  //  KP/deaths/valor are small absolute — short play window.
   // ─────────────────────────────────────────────────────────────────
   "lk-early": {
     f2p: {
-      power:      { p50:    5e6, p80:   12e6, p95:   20e6, p99:   30e6 },
-      killPoints: { p50:    5e6, p80:   20e6, p95:   50e6, p99:  100e6 },
-      deaths:     { p50:   50e3, p80:  200e3, p95:  500e3, p99:    1e6 },
-      valor:      { p50:  200e3, p80:  800e3, p95:  1.5e6, p99:  2.5e6 },
-      t5Kills:    { p50:      0, p80:   10e3, p95:   50e3, p99:  200e3 },
-      prevKvkDkp: { p50:      0, p80:    5e6, p95:   20e6, p99:   50e6 },
+      power:      { p50:    8e6, p80:   20e6, p95:   35e6, p99:   60e6 },
+      killPoints: { p50:    8e6, p80:   30e6, p95:   80e6, p99:  200e6 },
+      deaths:     { p50:  100e3, p80:  400e3, p95:    1e6, p99:    2e6 },
+      valor:      { p50:  500e3, p80:  1.5e6, p95:    3e6, p99:    5e6 },
+      t5Kills:    { p50:      0, p80:   20e3, p95:  100e3, p99:  300e3 },
+      prevKvkDkp: { p50:      0, p80:   10e6, p95:   40e6, p99:  100e6 },
     },
     low: {
-      power:      { p50:    8e6, p80:   18e6, p95:   30e6, p99:   45e6 },
-      killPoints: { p50:   15e6, p80:   50e6, p95:  120e6, p99:  250e6 },
-      deaths:     { p50:  100e3, p80:  400e3, p95:    1e6, p99:    2e6 },
-      valor:      { p50:  400e3, p80:  1.2e6, p95:    2e6, p99:    3e6 },
-      t5Kills:    { p50:    5e3, p80:   30e3, p95:  100e3, p99:  300e3 },
-      prevKvkDkp: { p50:    5e6, p80:   20e6, p95:   50e6, p99:  100e6 },
+      power:      { p50:   12e6, p80:   30e6, p95:   55e6, p99:   90e6 },
+      killPoints: { p50:   30e6, p80:  100e6, p95:  250e6, p99:  500e6 },
+      deaths:     { p50:  200e3, p80:  800e3, p95:    2e6, p99:    4e6 },
+      valor:      { p50:    1e6, p80:    3e6, p95:    5e6, p99:    9e6 },
+      t5Kills:    { p50:   10e3, p80:   60e3, p95:  300e3, p99:  800e3 },
+      prevKvkDkp: { p50:   10e6, p80:   40e6, p95:  100e6, p99:  180e6 },
     },
     mid: {
-      power:      { p50:   15e6, p80:   30e6, p95:   45e6, p99:   65e6 },
-      killPoints: { p50:   30e6, p80:  100e6, p95:  250e6, p99:  500e6 },
-      deaths:     { p50:  200e3, p80:  700e3, p95:  1.5e6, p99:    3e6 },
-      valor:      { p50:  600e3, p80:  1.5e6, p95:  2.5e6, p99:  3.5e6 },
-      t5Kills:    { p50:   10e3, p80:   50e3, p95:  200e3, p99:  500e3 },
-      prevKvkDkp: { p50:   10e6, p80:   40e6, p95:  100e6, p99:  200e6 },
+      power:      { p50:   25e6, p80:   55e6, p95:   90e6, p99:  130e6 },
+      killPoints: { p50:   80e6, p80:  300e6, p95:  700e6, p99:  1.2e9 },
+      deaths:     { p50:  500e3, p80:  1.8e6, p95:    4e6, p99:    7e6 },
+      valor:      { p50:  1.5e6, p80:    4e6, p95:    8e6, p99:   14e6 },
+      t5Kills:    { p50:   30e3, p80:  150e3, p95:  600e3, p99:  1.8e6 },
+      prevKvkDkp: { p50:   25e6, p80:   90e6, p95:  220e6, p99:  400e6 },
     },
     high: {
-      power:      { p50:   25e6, p80:   45e6, p95:   65e6, p99:   90e6 },
-      killPoints: { p50:   60e6, p80:  200e6, p95:  500e6, p99:    1e9 },
-      deaths:     { p50:  350e3, p80:    1e6, p95:    2e6, p99:    4e6 },
-      valor:      { p50:  800e3, p80:    2e6, p95:    3e6, p99:    4e6 },
-      t5Kills:    { p50:   30e3, p80:  150e3, p95:  400e3, p99:  800e3 },
-      prevKvkDkp: { p50:   20e6, p80:   80e6, p95:  200e6, p99:  400e6 },
+      power:      { p50:   45e6, p80:   85e6, p95:  130e6, p99:  180e6 },
+      killPoints: { p50:  200e6, p80:  700e6, p95:  1.5e9, p99:  2.8e9 },
+      deaths:     { p50:    1e6, p80:  3.5e6, p95:    8e6, p99:   14e6 },
+      valor:      { p50:  2.5e6, p80:    7e6, p95:   13e6, p99:   22e6 },
+      t5Kills:    { p50:   80e3, p80:  400e3, p95:  1.5e6, p99:  4.5e6 },
+      prevKvkDkp: { p50:   60e6, p80:  220e6, p95:  500e6, p99:  900e6 },
     },
     whale: {
-      power:      { p50:   35e6, p80:   60e6, p95:   85e6, p99:  120e6 },
-      killPoints: { p50:  100e6, p80:  350e6, p95:  800e6, p99:  1.5e9 },
-      deaths:     { p50:  500e3, p80:  1.5e6, p95:    3e6, p99:    6e6 },
-      valor:      { p50:    1e6, p80:  2.5e6, p95:  3.5e6, p99:    5e6 },
-      t5Kills:    { p50:   80e3, p80:  300e3, p95:  700e3, p99:  1.5e6 },
-      prevKvkDkp: { p50:   40e6, p80:  150e6, p95:  350e6, p99:  700e6 },
+      power:      { p50:   75e6, p80:  130e6, p95:  180e6, p99:  240e6 },
+      killPoints: { p50:  450e6, p80:  1.4e9, p95:    3e9, p99:    5e9 },
+      deaths:     { p50:    2e6, p80:    6e6, p95:   13e6, p99:   24e6 },
+      valor:      { p50:  4.5e6, p80:   12e6, p95:   20e6, p99:   34e6 },
+      t5Kills:    { p50:  200e3, p80:    1e6, p95:    4e6, p99:   11e6 },
+      prevKvkDkp: { p50:  140e6, p80:  500e6, p95:  1.1e9, p99:    2e9 },
     },
     kraken: {
-      power:      { p50:   50e6, p80:   80e6, p95:  110e6, p99:  160e6 },
-      killPoints: { p50:  150e6, p80:  500e6, p95:  1.2e9, p99:  2.5e9 },
-      deaths:     { p50:  700e3, p80:    2e6, p95:    4e6, p99:    8e6 },
-      valor:      { p50:  1.2e6, p80:    3e6, p95:    4e6, p99:    6e6 },
-      t5Kills:    { p50:  200e3, p80:  600e3, p95:  1.2e6, p99:  2.5e6 },
-      prevKvkDkp: { p50:   80e6, p80:  250e6, p95:  600e6, p99:  1.2e9 },
+      power:      { p50:  120e6, p80:  200e6, p95:  280e6, p99:  360e6 },
+      killPoints: { p50:    1e9, p80:    3e9, p95:    6e9, p99:   10e9 },
+      deaths:     { p50:    4e6, p80:   11e6, p95:   23e6, p99:   42e6 },
+      valor:      { p50:    7e6, p80:   18e6, p95:   32e6, p99:   55e6 },
+      t5Kills:    { p50:  500e3, p80:  2.5e6, p95:    9e6, p99:   25e6 },
+      prevKvkDkp: { p50:  280e6, p80:    1e9, p95:  2.2e9, p99:    4e9 },
     },
   },
 
   // ─────────────────────────────────────────────────────────────────
-  //  STAGE: lk-late (6-15 months) — KvK 3-4, T5 unlocking
+  //  STAGE: lk-late (6-15 months) — KvK 3-4, T5 fully unlocked
+  //  Top LK kraken @ KvK4 end: ~16-25B KP cumulative across 3-4 KvKs.
+  //  Power "current" stays modest (200-450M for top kraken — most field
+  //  fighters at 100-200M, only bunker krakens hit 500M+).
   // ─────────────────────────────────────────────────────────────────
   "lk-late": {
     f2p: {
-      power:      { p50:   20e6, p80:   40e6, p95:   60e6, p99:   80e6 },
-      killPoints: { p50:   50e6, p80:  200e6, p95:  500e6, p99:  1.2e9 },
-      deaths:     { p50:  300e3, p80:    1e6, p95:  2.5e6, p99:    5e6 },
-      valor:      { p50:  800e3, p80:    2e6, p95:    3e6, p99:    4e6 },
-      t5Kills:    { p50:   50e3, p80:  300e3, p95:  800e3, p99:    2e6 },
-      prevKvkDkp: { p50:   10e6, p80:   50e6, p95:  150e6, p99:  300e6 },
+      power:      { p50:   30e6, p80:   60e6, p95:   95e6, p99:  130e6 },
+      killPoints: { p50:  100e6, p80:  400e6, p95:    1e9, p99:    2e9 },
+      deaths:     { p50:  500e3, p80:    2e6, p95:    5e6, p99:    9e6 },
+      valor:      { p50:  1.5e6, p80:    4e6, p95:    7e6, p99:   12e6 },
+      t5Kills:    { p50:  100e3, p80:  500e3, p95:  1.5e6, p99:    4e6 },
+      prevKvkDkp: { p50:   25e6, p80:  100e6, p95:  280e6, p99:  550e6 },
     },
     low: {
-      power:      { p50:   30e6, p80:   55e6, p95:   80e6, p99:  110e6 },
-      killPoints: { p50:  150e6, p80:  500e6, p95:  1.2e9, p99:  2.5e9 },
-      deaths:     { p50:  600e3, p80:    2e6, p95:  4.5e6, p99:    8e6 },
-      valor:      { p50:  1.5e6, p80:    3e6, p95:  4.5e6, p99:    6e6 },
-      t5Kills:    { p50:  150e3, p80:  700e3, p95:  1.5e6, p99:    3e6 },
-      prevKvkDkp: { p50:   30e6, p80:  120e6, p95:  300e6, p99:  600e6 },
+      power:      { p50:   50e6, p80:   90e6, p95:  130e6, p99:  170e6 },
+      killPoints: { p50:  300e6, p80:    1e9, p95:  2.5e9, p99:  4.5e9 },
+      deaths:     { p50:    1e6, p80:    4e6, p95:    9e6, p99:   15e6 },
+      valor:      { p50:    3e6, p80:    7e6, p95:   12e6, p99:   20e6 },
+      t5Kills:    { p50:  300e3, p80:  1.5e6, p95:    4e6, p99:    9e6 },
+      prevKvkDkp: { p50:   60e6, p80:  220e6, p95:  550e6, p99:    1e9 },
     },
     mid: {
-      power:      { p50:   45e6, p80:   75e6, p95:  100e6, p99:  140e6 },
-      killPoints: { p50:  400e6, p80:  1.2e9, p95:  2.5e9, p99:    5e9 },
-      deaths:     { p50:    1e6, p80:    3e6, p95:    6e6, p99:   10e6 },
-      valor:      { p50:    2e6, p80:    4e6, p95:  5.5e6, p99:    7e6 },
-      t5Kills:    { p50:  300e3, p80:  1.2e6, p95:  2.5e6, p99:    5e6 },
-      prevKvkDkp: { p50:   60e6, p80:  250e6, p95:  600e6, p99:  1.2e9 },
+      power:      { p50:   75e6, p80:  130e6, p95:  180e6, p99:  240e6 },
+      killPoints: { p50:    1e9, p80:    3e9, p95:    6e9, p99:   11e9 },
+      deaths:     { p50:    2e6, p80:    7e6, p95:   15e6, p99:   26e6 },
+      valor:      { p50:    5e6, p80:   12e6, p95:   20e6, p99:   32e6 },
+      t5Kills:    { p50:  800e3, p80:    3e6, p95:    8e6, p99:   18e6 },
+      prevKvkDkp: { p50:  130e6, p80:  500e6, p95:  1.2e9, p99:  2.2e9 },
     },
     high: {
-      power:      { p50:   60e6, p80:   95e6, p95:  130e6, p99:  180e6 },
-      killPoints: { p50:  800e6, p80:  2.5e9, p95:    5e9, p99:    9e9 },
-      deaths:     { p50:  1.5e6, p80:    4e6, p95:    8e6, p99:   14e6 },
-      valor:      { p50:  2.5e6, p80:    5e6, p95:  6.5e6, p99:    8e6 },
-      t5Kills:    { p50:  600e3, p80:    2e6, p95:    4e6, p99:    8e6 },
-      prevKvkDkp: { p50:  120e6, p80:  450e6, p95:    1e9, p99:    2e9 },
+      power:      { p50:  110e6, p80:  170e6, p95:  230e6, p99:  300e6 },
+      killPoints: { p50:    2e9, p80:    6e9, p95:   12e9, p99:   20e9 },
+      deaths:     { p50:    4e6, p80:   12e6, p95:   25e6, p99:   45e6 },
+      valor:      { p50:    8e6, p80:   18e6, p95:   30e6, p99:   48e6 },
+      t5Kills:    { p50:  2.5e6, p80:    9e6, p95:   22e6, p99:   45e6 },
+      prevKvkDkp: { p50:  280e6, p80:    1e9, p95:  2.3e9, p99:    4e9 },
     },
     whale: {
-      power:      { p50:   80e6, p80:  120e6, p95:  160e6, p99:  220e6 },
-      killPoints: { p50:  1.5e9, p80:  4.5e9, p95:    8e9, p99:   15e9 },
-      deaths:     { p50:    2e6, p80:    5e6, p95:   10e6, p99:   18e6 },
-      valor:      { p50:    3e6, p80:  5.5e6, p95:    7e6, p99:    9e6 },
-      t5Kills:    { p50:  1.2e6, p80:  3.5e6, p95:    6e6, p99:   12e6 },
-      prevKvkDkp: { p50:  200e6, p80:  700e6, p95:  1.6e9, p99:    3e9 },
+      power:      { p50:  150e6, p80:  220e6, p95:  290e6, p99:  370e6 },
+      killPoints: { p50:    4e9, p80:   11e9, p95:   20e9, p99:   32e9 },
+      deaths:     { p50:    7e6, p80:   22e6, p95:   45e6, p99:   80e6 },
+      valor:      { p50:   12e6, p80:   26e6, p95:   42e6, p99:   65e6 },
+      t5Kills:    { p50:    6e6, p80:   22e6, p95:   55e6, p99:  120e6 },
+      prevKvkDkp: { p50:  600e6, p80:    2e9, p95:  4.5e9, p99:    8e9 },
     },
+    // Calibrated against real KvK4 dataset (kingdom 4028, 2494 active
+    // fighters): top single-KvK DKP 3.4B (Wind p99) — 4.5B max outlier;
+    // top single-KvK T5 130M (Wind p99); top single-KvK KP 3.4B; top
+    // current power 193M (post-KvK drained). Lifetime kraken anchors
+    // assume 3-4 KvKs of accumulation:
+    //   KP cumulative ~10-25B (single best ~3-4B × 3-4 KvKs)
+    //   T5 cumulative ~150-300M (T5 mostly KvK3+KvK4)
+    //   deaths cumulative ~30-60M (no HoH in LK so visible = real)
+    //   max valor 80-150M (peak ever held; players spend so not 4×KvK)
+    //   prevKvkDkp = single best KvK4 mega-fight (3.5-5B for top)
     kraken: {
-      power:      { p50:  100e6, p80:  150e6, p95:  200e6, p99:  280e6 },
-      killPoints: { p50:  2.5e9, p80:    6e9, p95:   12e9, p99:   22e9 },
-      deaths:     { p50:    3e6, p80:    7e6, p95:   13e6, p99:   22e6 },
-      valor:      { p50:  3.5e6, p80:    6e6, p95:    8e6, p99:   10e6 },
-      t5Kills:    { p50:    2e6, p80:    5e6, p95:    9e6, p99:   18e6 },
-      prevKvkDkp: { p50:  350e6, p80:    1e9, p95:  2.5e9, p99:  4.5e9 },
+      power:      { p50:  110e6, p80:  170e6, p95:  250e6, p99:  350e6 },
+      killPoints: { p50:    5e9, p80:   12e9, p95:   22e9, p99:   35e9 },
+      deaths:     { p50:    8e6, p80:   22e6, p95:   45e6, p99:   85e6 },
+      valor:      { p50:   18e6, p80:   38e6, p95:   65e6, p99:  100e6 },
+      t5Kills:    { p50:   12e6, p80:   45e6, p95:  130e6, p99:  300e6 },
+      prevKvkDkp: { p50:  800e6, p80:  2.5e9, p95:  4.5e9, p99:    7e9 },
     },
   },
 
   // ─────────────────────────────────────────────────────────────────
-  //  STAGE: soc-fresh (15-30 months) — first SoC seasons
-  //  Deaths anchors ~2× LK because HoH inflates the visible counter.
+  //  STAGE: soc-fresh (15-30 months) — first 1-3 SoC seasons
+  //  Roughly halfway between lk-late and soc-mature in magnitude.
+  //  Deaths anchors ~2× LK at same intensity (Hall of Heroes inflates).
   // ─────────────────────────────────────────────────────────────────
   "soc-fresh": {
     f2p: {
-      power:      { p50:   25e6, p80:   50e6, p95:   75e6, p99:  100e6 },
-      killPoints: { p50:  200e6, p80:  800e6, p95:    2e9, p99:    5e9 },
-      deaths:     { p50:  800e3, p80:    3e6, p95:    7e6, p99:   13e6 },
-      valor:      { p50:  1.5e6, p80:  3.5e6, p95:    5e6, p99:    7e6 },
-      t5Kills:    { p50:  300e3, p80:  1.5e6, p95:    4e6, p99:    8e6 },
-      prevKvkDkp: { p50:   50e6, p80:  200e6, p95:  600e6, p99:  1.2e9 },
+      power:      { p50:   40e6, p80:   75e6, p95:  105e6, p99:  140e6 },
+      killPoints: { p50:  300e6, p80:  1.2e9, p95:    3e9, p99:    6e9 },
+      deaths:     { p50:    1e6, p80:    4e6, p95:    9e6, p99:   16e6 },
+      valor:      { p50:    3e6, p80:    7e6, p95:   12e6, p99:   20e6 },
+      t5Kills:    { p50:  500e3, p80:    3e6, p95:    8e6, p99:   16e6 },
+      prevKvkDkp: { p50:  100e6, p80:  400e6, p95:    1e9, p99:    2e9 },
     },
     low: {
-      power:      { p50:   35e6, p80:   70e6, p95:  100e6, p99:  140e6 },
-      killPoints: { p50:  500e6, p80:    2e9, p95:    5e9, p99:   12e9 },
-      deaths:     { p50:  1.5e6, p80:    5e6, p95:   10e6, p99:   18e6 },
-      valor:      { p50:  2.5e6, p80:    5e6, p95:    7e6, p99:    9e6 },
-      t5Kills:    { p50:  600e3, p80:    3e6, p95:    7e6, p99:   14e6 },
-      prevKvkDkp: { p50:  120e6, p80:  500e6, p95:  1.5e9, p99:    3e9 },
+      power:      { p50:   55e6, p80:   95e6, p95:  130e6, p99:  170e6 },
+      killPoints: { p50:    1e9, p80:    4e9, p95:    9e9, p99:   18e9 },
+      deaths:     { p50:    3e6, p80:    9e6, p95:   20e6, p99:   36e6 },
+      valor:      { p50:    6e6, p80:   15e6, p95:   26e6, p99:   42e6 },
+      t5Kills:    { p50:    2e6, p80:    8e6, p95:   22e6, p99:   45e6 },
+      prevKvkDkp: { p50:  240e6, p80:    1e9, p95:  2.5e9, p99:    5e9 },
     },
     mid: {
-      power:      { p50:   50e6, p80:   95e6, p95:  130e6, p99:  180e6 },
-      killPoints: { p50:  1.2e9, p80:    5e9, p95:   12e9, p99:   25e9 },
-      deaths:     { p50:    3e6, p80:    8e6, p95:   16e6, p99:   28e6 },
-      valor:      { p50:  3.5e6, p80:    6e6, p95:    8e6, p99:   10e6 },
-      t5Kills:    { p50:  1.5e6, p80:    5e6, p95:   12e6, p99:   22e6 },
-      prevKvkDkp: { p50:  300e6, p80:    1e9, p95:    3e9, p99:    6e9 },
+      power:      { p50:   80e6, p80:  130e6, p95:  180e6, p99:  220e6 },
+      killPoints: { p50:    3e9, p80:   10e9, p95:   22e9, p99:   42e9 },
+      deaths:     { p50:    6e6, p80:   18e6, p95:   38e6, p99:   70e6 },
+      valor:      { p50:   12e6, p80:   28e6, p95:   48e6, p99:   78e6 },
+      t5Kills:    { p50:    7e6, p80:   25e6, p95:   65e6, p99:  140e6 },
+      prevKvkDkp: { p50:  600e6, p80:  2.2e9, p95:    6e9, p99:   11e9 },
     },
     high: {
-      power:      { p50:   75e6, p80:  120e6, p95:  170e6, p99:  230e6 },
-      killPoints: { p50:    3e9, p80:   10e9, p95:   22e9, p99:   45e9 },
-      deaths:     { p50:    5e6, p80:   12e6, p95:   22e6, p99:   40e6 },
-      valor:      { p50:  4.5e6, p80:    7e6, p95:  9.5e6, p99:   12e6 },
-      t5Kills:    { p50:    3e6, p80:    9e6, p95:   20e6, p99:   35e6 },
-      prevKvkDkp: { p50:  700e6, p80:  2.5e9, p95:    6e9, p99:   12e9 },
+      power:      { p50:  110e6, p80:  170e6, p95:  220e6, p99:  280e6 },
+      killPoints: { p50:    7e9, p80:   20e9, p95:   45e9, p99:   80e9 },
+      deaths:     { p50:   12e6, p80:   38e6, p95:   75e6, p99:  140e6 },
+      valor:      { p50:   20e6, p80:   45e6, p95:   78e6, p99:  120e6 },
+      t5Kills:    { p50:   20e6, p80:   70e6, p95:  180e6, p99:  400e6 },
+      prevKvkDkp: { p50:  1.2e9, p80:  4.2e9, p95:   11e9, p99:   20e9 },
     },
     whale: {
-      power:      { p50:  100e6, p80:  160e6, p95:  220e6, p99:  300e6 },
-      killPoints: { p50:    6e9, p80:   18e9, p95:   38e9, p99:   70e9 },
-      deaths:     { p50:    7e6, p80:   16e6, p95:   30e6, p99:   55e6 },
-      valor:      { p50:    5e6, p80:    8e6, p95:   11e6, p99:   14e6 },
-      t5Kills:    { p50:    5e6, p80:   14e6, p95:   28e6, p99:   50e6 },
-      prevKvkDkp: { p50:  1.5e9, p80:  4.5e9, p95:   10e9, p99:   20e9 },
+      power:      { p50:  150e6, p80:  220e6, p95:  290e6, p99:  360e6 },
+      killPoints: { p50:   15e9, p80:   42e9, p95:   80e9, p99:  140e9 },
+      deaths:     { p50:   25e6, p80:   70e6, p95:  150e6, p99:  280e6 },
+      valor:      { p50:   35e6, p80:   75e6, p95:  130e6, p99:  210e6 },
+      t5Kills:    { p50:   50e6, p80:  180e6, p95:  500e6, p99:  1.1e9 },
+      prevKvkDkp: { p50:  2.5e9, p80:    8e9, p95:   20e9, p99:   38e9 },
     },
     kraken: {
-      power:      { p50:  130e6, p80:  200e6, p95:  270e6, p99:  380e6 },
-      killPoints: { p50:   10e9, p80:   25e9, p95:   55e9, p99:  100e9 },
-      deaths:     { p50:   10e6, p80:   22e6, p95:   40e6, p99:   70e6 },
-      valor:      { p50:    6e6, p80:  9.5e6, p95:   13e6, p99:   17e6 },
-      t5Kills:    { p50:    8e6, p80:   20e6, p95:   40e6, p99:   70e6 },
-      prevKvkDkp: { p50:  2.5e9, p80:    7e9, p95:   16e9, p99:   30e9 },
+      power:      { p50:  220e6, p80:  330e6, p95:  420e6, p99:  500e6 },
+      killPoints: { p50:   25e9, p80:   65e9, p95:  120e9, p99:  200e9 },
+      deaths:     { p50:   45e6, p80:  120e6, p95:  240e6, p99:  430e6 },
+      valor:      { p50:   55e6, p80:  120e6, p95:  200e6, p99:  310e6 },
+      t5Kills:    { p50:  120e6, p80:  400e6, p95:    1e9, p99:  2.4e9 },
+      prevKvkDkp: { p50:    5e9, p80:   15e9, p95:   34e9, p99:   58e9 },
     },
   },
 
   // ─────────────────────────────────────────────────────────────────
   //  STAGE: soc-mature (30+ months) — established SoC veteran
-  //  Kraken p99 is calibrated to the LIVE top-1 of the entire game
-  //  (riseofstats live ranks, May 2026: top KP ~150B, top power ~500M,
-  //  top single-KvK valor peak ~22M, top T5 cumulative ~100M, mega-KvK
-  //  DKP ~15-25B). A real top-of-game player hits p99 across the board
-  //  and scores ~100/100. Above-p99 outliers (theoretical 200B+ KP
-  //  super-krakens) clip at 100 — no further bonus.
+  //  Kraken p99 = LIVE TOP-1 OF THE ENTIRE GAME (Velociraptor 1 /
+  //  Mr hope / Wild lion class — kingdoms 4028+, May 2026):
+  //    KP 115-150B, current power 187M-1.77B (max 824M-3.2B),
+  //    deaths 522-792M, max valor 409-527M, T5 cumulative 5.1-6.6B,
+  //    single mega-KvK DKP ~30-40B.
+  //  A real top-of-game player hits p99 across the board → ~100/100.
   // ─────────────────────────────────────────────────────────────────
   "soc-mature": {
+    // Power semantics: CURRENT power, not max. Active field-fighters
+    // intentionally play at 100-150M (commander slots and march cap are
+    // the real bottleneck — extra troops just die in flag fights). Bunker
+    // krakens with 400-700M power are NOT inherently better, just a
+    // different style. Anchors below reflect "active field player" reality;
+    // bunker krakens still clip at 1.00 (no over-credit for hoarding).
+    // The real combat signal lives in KP/deaths/valor/T5/DKP — power is
+    // mostly a "did you build at all" check.
+    // Power semantics: see general note above. Anchors target field-fighter
+    // ceilings; bunker krakens with 1B+ power clip at 1.00 same as a
+    // 500M field kraken.
     f2p: {
-      power:      { p50:   35e6, p80:   65e6, p95:   90e6, p99:  120e6 },
-      killPoints: { p50:  800e6, p80:    3e9, p95:    8e9, p99:   18e9 },
-      deaths:     { p50:    2e6, p80:    7e6, p95:   16e6, p99:   30e6 },
-      valor:      { p50:    2e6, p80:    4e6, p95:    6e6, p99:    8e6 },
-      t5Kills:    { p50:  800e3, p80:    3e6, p95:    8e6, p99:   16e6 },
-      prevKvkDkp: { p50:  200e6, p80:  800e6, p95:    2e9, p99:    4e9 },
+      power:      { p50:   40e6, p80:   75e6, p95:  100e6, p99:  130e6 },
+      killPoints: { p50:  800e6, p80:    3e9, p95:    8e9, p99:   16e9 },
+      deaths:     { p50:    2e6, p80:    8e6, p95:   18e6, p99:   34e6 },
+      valor:      { p50:    7e6, p80:   16e6, p95:   28e6, p99:   45e6 },
+      t5Kills:    { p50:  1.5e6, p80:    7e6, p95:   20e6, p99:   42e6 },
+      prevKvkDkp: { p50:  180e6, p80:  700e6, p95:  1.8e9, p99:  3.5e9 },
     },
     low: {
-      power:      { p50:   50e6, p80:   85e6, p95:  120e6, p99:  160e6 },
-      killPoints: { p50:    2e9, p80:    7e9, p95:   18e9, p99:   35e9 },
-      deaths:     { p50:    4e6, p80:   12e6, p95:   25e6, p99:   45e6 },
-      valor:      { p50:    3e6, p80:  5.5e6, p95:    8e6, p99:   11e6 },
-      t5Kills:    { p50:    2e6, p80:    6e6, p95:   14e6, p99:   25e6 },
-      prevKvkDkp: { p50:  400e6, p80:  1.5e9, p95:    4e9, p99:    8e9 },
+      power:      { p50:   55e6, p80:   95e6, p95:  130e6, p99:  170e6 },
+      killPoints: { p50:    2e9, p80:    7e9, p95:   18e9, p99:   34e9 },
+      deaths:     { p50:    6e6, p80:   18e6, p95:   40e6, p99:   75e6 },
+      valor:      { p50:   13e6, p80:   30e6, p95:   55e6, p99:   85e6 },
+      t5Kills:    { p50:    6e6, p80:   22e6, p95:   55e6, p99:  120e6 },
+      prevKvkDkp: { p50:  500e6, p80:  1.8e9, p95:  4.5e9, p99:    8e9 },
     },
     mid: {
-      power:      { p50:   70e6, p80:  110e6, p95:  150e6, p99:  200e6 },
-      killPoints: { p50:    4e9, p80:   14e9, p95:   32e9, p99:   60e9 },
-      deaths:     { p50:    6e6, p80:   18e6, p95:   35e6, p99:   60e6 },
-      valor:      { p50:    4e6, p80:    7e6, p95:   10e6, p99:   13e6 },
-      t5Kills:    { p50:    4e6, p80:   10e6, p95:   22e6, p99:   40e6 },
-      prevKvkDkp: { p50:  800e6, p80:    3e9, p95:    8e9, p99:   16e9 },
+      power:      { p50:   80e6, p80:  130e6, p95:  170e6, p99:  220e6 },
+      killPoints: { p50:    5e9, p80:   16e9, p95:   38e9, p99:   65e9 },
+      deaths:     { p50:   14e6, p80:   42e6, p95:   85e6, p99:  150e6 },
+      valor:      { p50:   25e6, p80:   55e6, p95:   95e6, p99:  150e6 },
+      t5Kills:    { p50:   18e6, p80:   75e6, p95:  200e6, p99:  450e6 },
+      prevKvkDkp: { p50:  1.1e9, p80:    4e9, p95:   10e9, p99:   18e9 },
     },
     high: {
-      power:      { p50:  100e6, p80:  150e6, p95:  200e6, p99:  270e6 },
-      killPoints: { p50:    8e9, p80:   25e9, p95:   55e9, p99:  100e9 },
-      deaths:     { p50:   10e6, p80:   25e6, p95:   50e6, p99:   85e6 },
-      valor:      { p50:    5e6, p80:  8.5e6, p95:   12e6, p99:   16e6 },
-      t5Kills:    { p50:    7e6, p80:   18e6, p95:   35e6, p99:   60e6 },
-      prevKvkDkp: { p50:  1.5e9, p80:    5e9, p95:   12e9, p99:   24e9 },
+      power:      { p50:  110e6, p80:  170e6, p95:  220e6, p99:  280e6 },
+      killPoints: { p50:   12e9, p80:   34e9, p95:   70e9, p99:  120e9 },
+      deaths:     { p50:   30e6, p80:   90e6, p95:  190e6, p99:  340e6 },
+      valor:      { p50:   45e6, p80:   95e6, p95:  160e6, p99:  240e6 },
+      t5Kills:    { p50:   65e6, p80:  240e6, p95:  650e6, p99:  1.5e9 },
+      prevKvkDkp: { p50:  2.4e9, p80:    8e9, p95:   18e9, p99:   30e9 },
     },
     whale: {
-      power:      { p50:  150e6, p80:  220e6, p95:  290e6, p99:  380e6 },
-      killPoints: { p50:   15e9, p80:   40e9, p95:   80e9, p99:  140e9 },
-      deaths:     { p50:   15e6, p80:   35e6, p95:   65e6, p99:  110e6 },
-      valor:      { p50:  6.5e6, p80:   10e6, p95:   14e6, p99:   18e6 },
-      t5Kills:    { p50:   12e6, p80:   28e6, p95:   50e6, p99:   85e6 },
-      prevKvkDkp: { p50:    3e9, p80:    8e9, p95:   18e9, p99:   35e9 },
+      power:      { p50:  140e6, p80:  220e6, p95:  290e6, p99:  370e6 },
+      killPoints: { p50:   25e9, p80:   60e9, p95:  110e9, p99:  170e9 },
+      deaths:     { p50:   60e6, p80:  170e6, p95:  340e6, p99:  580e6 },
+      valor:      { p50:   75e6, p80:  160e6, p95:  260e6, p99:  390e6 },
+      t5Kills:    { p50:  200e6, p80:  700e6, p95:  1.7e9, p99:  3.5e9 },
+      prevKvkDkp: { p50:    5e9, p80:   13e9, p95:   28e9, p99:   45e9 },
     },
+    // Kraken p99 = real top-of-game (Velociraptor / Mr hope / Wild lion).
+    // KP 150B, T5 6-7B, deaths 800M, valor 500M, mega-KvK DKP 50B+.
+    // Power p99 500M = bunker ceiling; field-style kraken at 200-300M
+    // still scores well via KP/deaths/valor/T5/DKP.
     kraken: {
-      power:      { p50:  180e6, p80:  280e6, p95:  380e6, p99:  500e6 },
-      killPoints: { p50:   20e9, p80:   50e9, p95:   90e9, p99:  150e9 },
-      deaths:     { p50:   18e6, p80:   40e6, p95:   75e6, p99:  130e6 },
-      valor:      { p50:    7e6, p80:   11e6, p95:   15e6, p99:   22e6 },
-      t5Kills:    { p50:   15e6, p80:   35e6, p95:   60e6, p99:  100e6 },
-      prevKvkDkp: { p50:  1.5e9, p80:    4e9, p95:   10e9, p99:   20e9 },
+      power:      { p50:  200e6, p80:  320e6, p95:  420e6, p99:  500e6 },
+      killPoints: { p50:   55e9, p80:  100e9, p95:  135e9, p99:  165e9 },
+      deaths:     { p50:  130e6, p80:  340e6, p95:  580e6, p99:  830e6 },
+      valor:      { p50:  120e6, p80:  260e6, p95:  410e6, p99:  540e6 },
+      t5Kills:    { p50:  900e6, p80:  2.8e9, p95:    5e9, p99:    7e9 },
+      prevKvkDkp: { p50:   11e9, p80:   23e9, p95:   38e9, p99:   55e9 },
     },
   },
 };
@@ -502,10 +559,11 @@ const SPENDING_LABELS: Record<SpendingTier, string> = {
   kraken: "kraken",
 };
 
-/** KP yields per tier (game-engine values, ×5 vs prior internal model
- *  but same RATIOS — used purely for low-tier-share computation):
- *    T1 = 5, T2 = 10, T3 = 20, T4 = 40, T5 = 100
- *  A "T1 trader" who farmed T1 kills for KP shows up as lowTierShare > 0.6. */
+/** KP yields per tier (verified against live profile screens — Velociraptor
+ *  T1 26.3M KP / 131.7M kills = 0.2; T5 132B / 6.6B = 20). Game ratios:
+ *    T1 = 0.2, T2 = 2, T3 = 4, T4 = 10, T5 = 20  (1 : 10 : 20 : 50 : 100)
+ *  Used purely for the low-tier-share gate; absolute values irrelevant.
+ *  A T1-farmer who padded KP via 8M+ T1 kills shows up as lowTierShare > 0.6. */
 function lowTierKpShare(
   t1: number | null,
   t2: number | null,
@@ -518,9 +576,9 @@ function lowTierKpShare(
   const v3 = t3 ?? 0;
   const v4 = t4 ?? 0;
   const v5 = t5 ?? 0;
-  const total = v1 * 5 + v2 * 10 + v3 * 20 + v4 * 40 + v5 * 100;
+  const total = v1 + v2 * 10 + v3 * 20 + v4 * 50 + v5 * 100;
   if (total < 100_000) return 0;
-  const lowTier = v1 * 5 + v2 * 10 + v3 * 20;
+  const lowTier = v1 + v2 * 10 + v3 * 20;
   return lowTier / total;
 }
 
