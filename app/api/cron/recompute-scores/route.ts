@@ -16,7 +16,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const CRON_TOKEN = process.env.CRON_TOKEN ?? process.env.ADMIN_TOKEN;
+// Vercel Cron auto-sends `Authorization: Bearer ${CRON_SECRET}` when
+// CRON_SECRET is configured in the project's env vars. Falls back to
+// ADMIN_TOKEN for manual debug invocation (same pattern as cleanup).
+const CRON_TOKEN = process.env.CRON_SECRET ?? process.env.ADMIN_TOKEN;
 
 /**
  * Daily recompute pass. Runs after a quiet hour to:
