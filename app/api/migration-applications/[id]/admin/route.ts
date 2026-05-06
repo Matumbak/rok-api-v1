@@ -19,7 +19,7 @@ import {
 import { parseRokNumber } from "@/lib/parse-rok-number";
 import { parseRokDuration } from "@/lib/parse-rok-duration";
 import {
-  computeScore,
+  computeApplicantScore,
   inferProfile,
   inferStage,
   percentileTag,
@@ -246,7 +246,7 @@ async function enrichApplicationDetail(
   // per-component "10/18" tooltip on hover. We don't persist the
   // breakdown JSON because it's deterministic from the inputs and
   // changing the formula in code would invalidate stored values.
-  const recomputed = computeScore(
+  const recomputed = computeApplicantScore(
     {
       accountBornAt: item.accountBornAt,
       vipLevel: item.vipLevel,
@@ -277,21 +277,30 @@ async function enrichApplicationDetail(
     inferProfile(item.accountBornAt);
   const profileAutoInferred = item.scoringProfile == null;
   // 4-stage cohort always derived from accountBornAt — not overridable.
-  const effectiveCohort = recomputed.stage;
+  const effectiveCohort = recomputed.main.stage;
 
   return {
     ...item,
-    // Expose the resolved seed (db value or back-filled from currentKingdom)
-    // so the admin UI shows it consistently for legacy + new applicants.
     detectedSeed: detectedSeed ?? null,
     percentiles,
     driftFlags,
     prevKvkDkpComputed,
-    scoreBreakdown: recomputed.breakdown,
+    scoreBreakdown: recomputed.main.breakdown,
     effectiveProfile,
     profileAutoInferred,
     effectiveCohort,
-    playedKvks: recomputed.playedKvks,
+    playedKvks: recomputed.main.playedKvks,
+    /** Per-seed scoring scenarios. Null when applicant hasn't played
+     *  any SoC seasons. Lets admin see "if scored against X-seed
+     *  benchmark, applicant gets Y/100" for all 5 seeds. */
+    perSeedScores: recomputed.perSeedScores,
+    /** Effective overall score (tier-blind main). Persisted in DB as
+     *  overallScore on next PATCH; exposed here so admin always reads
+     *  the canonical post-recompute number. */
+    overallScore: recomputed.main.score,
+    /** Tier-blind main + seed-band tag (when applicable). Same shape
+     *  as item.tags but freshly recomputed with current benchmarks. */
+    tags: recomputed.tags,
   };
 }
 
@@ -591,7 +600,7 @@ export async function PATCH(
           null,
       };
       const patchBenchmarkLookup = await loadBenchmarkLookup();
-      const { score, tags } = computeScore(
+      const out = computeApplicantScore(
         {
           accountBornAt: merged.accountBornAt,
           vipLevel: merged.vipLevel ?? "",
@@ -615,8 +624,8 @@ export async function PATCH(
         },
         patchBenchmarkLookup,
       );
-      data.overallScore = score;
-      data.tags = tags as unknown as Prisma.InputJsonValue;
+      data.overallScore = out.main.score;
+      data.tags = out.tags as unknown as Prisma.InputJsonValue;
     }
 
     let archivedNow = false;

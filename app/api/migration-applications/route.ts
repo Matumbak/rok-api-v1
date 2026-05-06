@@ -13,7 +13,7 @@ import {
 import { parseRokNumber } from "@/lib/parse-rok-number";
 import { parseRokDuration } from "@/lib/parse-rok-duration";
 import {
-  computeScore,
+  computeApplicantScore,
   type ScoringProfile,
   type SpendingTier,
 } from "@/lib/scoring";
@@ -88,7 +88,7 @@ export async function POST(request: Request) {
         if (m != null) autofillNormalized[k] = m;
       }
     }
-    const { score, tags } = computeScore({
+    const _scoreOut = computeApplicantScore({
       accountBornAt: accountBornAtDate,
       vipLevel: data.vipLevel,
       powerN: normalized.powerN,
@@ -109,6 +109,8 @@ export async function POST(request: Request) {
       spendingTier: data.spendingTier as SpendingTier,
       scoringProfile: (data.scoringProfile as ScoringProfile) ?? null,
     });
+    const score = _scoreOut.main.score;
+    const tags = _scoreOut.tags;
 
     const created = await prisma.migrationApplication.create({
       data: {

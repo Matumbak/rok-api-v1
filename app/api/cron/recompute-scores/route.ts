@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { withCors } from "@/lib/cors";
 import {
-  computeScore,
+  computeApplicantScore,
   type ScoringProfile,
   type SpendingTier,
 } from "@/lib/scoring";
@@ -81,7 +81,7 @@ export async function POST(request: Request) {
   let updated = 0;
   let unchanged = 0;
   for (const app of apps) {
-    const result = computeScore(
+    const result = computeApplicantScore(
       {
         accountBornAt: app.accountBornAt,
         vipLevel: app.vipLevel,
@@ -107,7 +107,7 @@ export async function POST(request: Request) {
     );
     if (
       app.overallScore != null &&
-      Math.abs(app.overallScore - result.score) < 0.05
+      Math.abs(app.overallScore - result.main.score) < 0.05
     ) {
       unchanged++;
       continue;
@@ -115,7 +115,7 @@ export async function POST(request: Request) {
     await prisma.migrationApplication.update({
       where: { id: app.id },
       data: {
-        overallScore: result.score,
+        overallScore: result.main.score,
         tags: result.tags as unknown as Prisma.InputJsonValue,
       },
     });

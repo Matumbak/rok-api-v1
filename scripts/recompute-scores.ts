@@ -11,7 +11,7 @@
  */
 
 import { prisma } from "../lib/db";
-import { computeScore, type ScoringProfile, type SpendingTier } from "../lib/scoring";
+import { computeApplicantScore, type ScoringProfile, type SpendingTier } from "../lib/scoring";
 
 async function main() {
   const apps = await prisma.migrationApplication.findMany({
@@ -47,7 +47,7 @@ async function main() {
 
   let updated = 0;
   for (const app of apps) {
-    const result = computeScore({
+    const result = computeApplicantScore({
       accountBornAt: app.accountBornAt,
       vipLevel: app.vipLevel,
       powerN: app.powerN,
@@ -75,7 +75,7 @@ async function main() {
     await prisma.migrationApplication.update({
       where: { id: app.id },
       data: {
-        overallScore: result.score,
+        overallScore: result.main.score,
         tags: result.tags as unknown as object,
       },
     });
@@ -83,12 +83,12 @@ async function main() {
     const tagsAdded = result.tags.filter((t) => !oldTags.includes(t));
     const tagsRemoved = oldTags.filter((t) => !result.tags.includes(t));
     const scoreDelta =
-      oldScore != null ? (result.score - oldScore).toFixed(1) : "NEW";
+      oldScore != null ? (result.main.score - oldScore).toFixed(1) : "NEW";
 
     console.log(
       `  ${app.nickname.padEnd(20)} #${app.governorId.padEnd(11)} ` +
-        `${String(oldScore ?? "—").padStart(5)} → ${String(result.score).padStart(5)} ` +
-        `(Δ ${scoreDelta}, profile=${result.profile})`,
+        `${String(oldScore ?? "—").padStart(5)} → ${String(result.main.score).padStart(5)} ` +
+        `(Δ ${scoreDelta}, profile=${result.main.profile})`,
     );
     if (tagsAdded.length > 0)
       console.log(`    + ${tagsAdded.join(", ")}`);

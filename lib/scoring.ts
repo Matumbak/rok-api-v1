@@ -251,7 +251,7 @@ export function inferProfile(accountBornAt: Date | null): ScoringProfile {
     : "season-of-conquest";
 }
 
-function ageMonthsFromDate(born: Date | null): number {
+export function ageMonthsFromDate(born: Date | null): number {
   if (!born) return 0;
   const now = new Date();
   let m =
@@ -412,9 +412,21 @@ export function computeScore(
     k === "soc" && input.detectedSeed ? input.detectedSeed : undefined;
   const vip = Number.parseInt(input.vipLevel, 10);
 
-  // Lifetime expected = sum of per-KvK medians across played history.
-  // If played is empty (very young account, <4mo), expected = 0 and we
-  // skip ratio-based stats; player gets only age + vip + sanity scoring.
+  // Lifetime expected. Naive math is "sum of per-KvK p50 across played
+  // KvKs", but that captures ONLY in-KvK contributions. Real lifetime
+  // stats include massive out-of-KvK accumulation:
+  //   KP — pre-KvK1 grind, daily barbs/Lost Canyon/Holy Sites, T1 farm
+  //   T5 — daily kingdom events with T5, holy site fights
+  //   Deaths — mostly in-KvK but some PvP / failed holy sites
+  // Empirically (from real applicants vs sum-of-medians), out-of-KvK
+  // contribution dominates lifetime KP by ~5-7×; less for T5/deaths.
+  // Without these multipliers, every applicant gets 20-30× ratios and
+  // maxes out the curve trivially (Matumba 1.8B KP / 58M expected = 30×
+  // → score 18/18 even though they're a mid-tier player).
+  const LIFETIME_KP_MULTIPLIER = 6;
+  const LIFETIME_T5_MULTIPLIER = 2;
+  const LIFETIME_DEATHS_MULTIPLIER = 1.2;
+
   let expKp = 0;
   let expT5 = 0;
   let expDeaths = 0;
@@ -429,6 +441,10 @@ export function computeScore(
     expDeaths += b.deaths.p50;
     if (b.acclaim.p80 > valorRefP80) valorRefP80 = b.acclaim.p80;
   }
+  // Apply lifetime multipliers (see comment above where they're declared).
+  expKp *= LIFETIME_KP_MULTIPLIER;
+  expT5 *= LIFETIME_T5_MULTIPLIER;
+  expDeaths *= LIFETIME_DEATHS_MULTIPLIER;
   const expValor = valorRefP80 * 1.5;
 
   // Discount KP by low-tier share — a T1-trader has inflated KP.
@@ -630,15 +646,10 @@ export function computeScore(
 
   if (input.spendingTier === "f2p" && score >= 60) tags.add("f2p-hero");
 
-  // Seed-aware tag for SoC applicants. Combines detected seed with the
-  // applicant's score band so officers see "this is a top D-seed
-  // fighter" or "mid Imperium fighter" at a glance.
-  if (input.detectedSeed && played.includes("soc")) {
-    const seedSlug = input.detectedSeed.toLowerCase();
-    const band =
-      score >= 85 ? "top" : score >= 65 ? "high" : score >= 40 ? "mid" : "low";
-    tags.add(`${seedSlug}-seed-${band}`);
-  }
+  // NOTE: the "<seed>-seed-<band>" tag used to live here, but it's now
+  // computed by computeApplicantScore() because the band depends on the
+  // applicant's score IN their detected seed (not the main tier-blind
+  // score). Adding it here would double-count or mis-band.
 
   if (input.maxValorPointsN != null && input.maxValorPointsN >= 5_000_000) {
     tags.add("kvk-veteran");
@@ -682,6 +693,83 @@ function round1(n: number): number {
 }
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+export type Seed = "Imperium" | "A" | "B" | "C" | "D";
+export const SEEDS: Seed[] = ["Imperium", "A", "B", "C", "D"];
+
+export interface ApplicantScoreOutput {
+  /** Main, tier-blind score — uses (soc, general) benchmark for SoC
+   *  KvKs regardless of applicant's detected seed. This is what gets
+   *  persisted as `overallScore` and shown as the primary number in
+   *  admin. */
+  main: ScoreResult;
+  /** Per-seed scores: "if scored against <seed>-seed benchmark, X/100".
+   *  Null for applicants who haven't played any SoC season — there's
+   *  nothing seed-aware to compare. */
+  perSeedScores: Record<Seed, number> | null;
+  /** Final tags for persistence: main.tags + (optionally) the seed-
+   *  band tag derived from the applicant's home seed × their score in
+   *  that seed (e.g. "b-seed-high" = applicant from B-seed kingdom
+   *  who scored ≥65 when graded against the B-seed benchmark). */
+  tags: string[];
+}
+
+/** Top-level scoring helper used by all call sites (submit, admin GET,
+ *  admin PATCH, cron, recompute scripts). Computes:
+ *
+ *    - main, tier-blind score (`detectedSeed` ignored for SoC math)
+ *    - per-seed scores when applicant played SoC (5 separate runs)
+ *    - composite tag list including the seed-band tag based on the
+ *      applicant's home KD seed × their score in that seed
+ *
+ *  Persisting flow: caller saves `output.main.score` as overallScore
+ *  and `output.tags` (NOT main.tags) so the seed-band tag survives. */
+export function computeApplicantScore(
+  input: ScoreInputs,
+  benchmarkLookup?: BenchmarkLookup,
+): ApplicantScoreOutput {
+  // Main = tier-blind. Force detectedSeed=null so SoC KvKs use the
+  // (soc, general) benchmark.
+  const main = computeScore({ ...input, detectedSeed: null }, benchmarkLookup);
+
+  const months = ageMonthsFromDate(input.accountBornAt);
+  const playedSoC = kvksPlayed(months).includes("soc");
+
+  let perSeedScores: Record<Seed, number> | null = null;
+  if (playedSoC) {
+    perSeedScores = {
+      Imperium: computeScore({ ...input, detectedSeed: "Imperium" }, benchmarkLookup).score,
+      A: computeScore({ ...input, detectedSeed: "A" }, benchmarkLookup).score,
+      B: computeScore({ ...input, detectedSeed: "B" }, benchmarkLookup).score,
+      C: computeScore({ ...input, detectedSeed: "C" }, benchmarkLookup).score,
+      D: computeScore({ ...input, detectedSeed: "D" }, benchmarkLookup).score,
+    };
+  }
+
+  let tags = main.tags;
+  if (
+    input.detectedSeed &&
+    perSeedScores &&
+    (input.detectedSeed === "Imperium" ||
+      input.detectedSeed === "A" ||
+      input.detectedSeed === "B" ||
+      input.detectedSeed === "C" ||
+      input.detectedSeed === "D")
+  ) {
+    const seedScore = perSeedScores[input.detectedSeed];
+    const band =
+      seedScore >= 85
+        ? "top"
+        : seedScore >= 65
+          ? "high"
+          : seedScore >= 40
+            ? "mid"
+            : "low";
+    tags = [...main.tags, `${input.detectedSeed.toLowerCase()}-seed-${band}`];
+  }
+
+  return { main, perSeedScores, tags };
 }
 
 export function percentileTag(pct: number | null | undefined): string | null {

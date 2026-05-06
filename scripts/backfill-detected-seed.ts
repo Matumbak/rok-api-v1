@@ -12,7 +12,7 @@
  */
 
 import { prisma } from "../lib/db";
-import { computeScore, type ScoringProfile, type SpendingTier } from "../lib/scoring";
+import { computeApplicantScore, type ScoringProfile, type SpendingTier } from "../lib/scoring";
 import { loadBenchmarkLookup } from "../lib/benchmarks";
 
 async function main() {
@@ -64,7 +64,7 @@ async function main() {
   const all = await prisma.migrationApplication.findMany();
   let scoreChanged = 0;
   for (const a of all) {
-    const r = computeScore(
+    const r = computeApplicantScore(
       {
         accountBornAt: a.accountBornAt,
         vipLevel: a.vipLevel,
@@ -89,15 +89,15 @@ async function main() {
       lookup,
     );
     const old = a.overallScore;
-    if (old != null && Math.abs(old - r.score) < 0.05) continue;
+    if (old != null && Math.abs(old - r.main.score) < 0.05) continue;
     await prisma.migrationApplication.update({
       where: { id: a.id },
       data: {
-        overallScore: r.score,
+        overallScore: r.main.score,
         tags: r.tags as unknown as object,
       },
     });
-    console.log(`  ${a.nickname.padEnd(20)} ${String(old ?? "—").padStart(5)} → ${String(r.score).padStart(5)} (seed=${a.detectedSeed ?? "—"}, tags=[${r.tags.join(",")}])`);
+    console.log(`  ${a.nickname.padEnd(20)} ${String(old ?? "—").padStart(5)} → ${String(r.main.score).padStart(5)} (seed=${a.detectedSeed ?? "—"}, tags=[${r.tags.join(",")}])`);
     scoreChanged++;
   }
   console.log(`\nDone. ${scoreChanged} scores changed.`);
