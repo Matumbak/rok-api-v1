@@ -440,9 +440,15 @@ export function computeScore(
     expKp += p90(b.kp);
     expT5 += p90(b.t5);
     expDeaths += p90(b.deaths);
-    if (b.acclaim.p80 > valorRefP80) valorRefP80 = b.acclaim.p80;
+    // maxValorPoints in the applicant profile is a SINGLE-KVK PEAK
+    // across their lifetime — the highest valor balance ever
+    // displayed, not a cumulative sum. So expected = the best
+    // single-KvK acclaim p90 they could plausibly have hit, taken
+    // as MAX across their played KvKs (their best opportunity).
+    const acclaimP90 = p90(b.acclaim);
+    if (acclaimP90 > valorRefP80) valorRefP80 = acclaimP90;
   }
-  const expValor = valorRefP80 * 1.5;
+  const expValor = valorRefP80;
 
   // Discount KP by low-tier share — a T1-trader has inflated KP.
   const ltShare = lowTierKpShare(
