@@ -122,11 +122,21 @@ export function processScanForBenchmark(rows: ScanRow[]): {
   return { stats, rowCount: active.length };
 }
 
-/** Sample-weighted average of percentiles across multiple uploads. Each
- *  scan's percentile is weighted by its rowCount; bigger scans pull more.
- *  Includes the hardcoded prior with weight = PRIOR_WEIGHT (acts as a
- *  Bayesian shrinkage that fades as real samples accumulate). */
-const PRIOR_WEIGHT = 50;
+/** Sample-weighted average of percentiles across uploads. Each scan's
+ *  percentile is weighted by its rowCount; bigger scans pull more.
+ *
+ *  PRIOR_WEIGHT = 0 — when ANY upload exists for a kvkId, the benchmark
+ *  is purely data-driven. The hardcoded KVK_PRIORS in lib/scoring.ts
+ *  are kept ONLY as a code-level fallback for kvkIds that have zero
+ *  uploads (rebuildBenchmark drops the row → loadBenchmarkLookup serves
+ *  the prior). This keeps the system from degenerating before scans are
+ *  uploaded for a phase but ensures hardcoded "guesses" don't pollute
+ *  benchmarks once real data arrives.
+ *
+ *  Trade-off: a single small noisy scan (n=200) becomes 100% of that
+ *  kvkId's benchmark. The user can mitigate by uploading multiple scans
+ *  per kvkId — the rowCount-weighted blend smooths noise. */
+const PRIOR_WEIGHT = 0;
 
 function blend(
   prior: PercentileAnchors,
@@ -180,7 +190,12 @@ export async function rebuildBenchmark(kvkId: KvkId): Promise<void> {
       })
       // Drop pathological zeros so they don't poison the blend.
       .filter((u) => u.anchors.p99 > 0);
-    blended[k] = blend(prior[k], uploadAnchors);
+    // With PRIOR_WEIGHT=0, blend() would divide by zero when uploadAnchors
+    // is empty (e.g. all scans had this stat as 0 — pre-T5 era for t5 stat).
+    // Fall back to prior in that case so this single stat doesn't degrade
+    // the whole benchmark for the kvkId.
+    blended[k] =
+      uploadAnchors.length === 0 ? prior[k] : blend(prior[k], uploadAnchors);
   }
 
   for (const u of uploads) totalSamples += u.rowCount;
