@@ -205,6 +205,26 @@ async function enrichApplicationDetail(
   // Per-KvK benchmark lookup. Falls back to KVK_PRIORS for kvkIds that
   // have no upload yet — same effect as if this feature didn't exist.
   const benchmarkLookup = await loadBenchmarkLookup();
+
+  // detectedSeed back-fill: if the applicant didn't supply it via DKP
+  // scan upload (older apps, or apps where the form didn't capture it),
+  // try to infer from `currentKingdom` (their typed KD number → lookup
+  // in KingdomSeed). Lets the seed-aware scoring + popover hint kick in
+  // for legacy apps without requiring a manual backfill pass.
+  let detectedSeed = item.detectedSeed;
+  if (!detectedSeed && item.currentKingdom) {
+    const kdNum = Number.parseInt(
+      item.currentKingdom.replace(/\D/g, ""),
+      10,
+    );
+    if (Number.isFinite(kdNum) && kdNum > 0) {
+      const ks = await prisma.kingdomSeed.findUnique({
+        where: { kingdomId: kdNum },
+        select: { seed: true },
+      });
+      if (ks) detectedSeed = ks.seed;
+    }
+  }
   // Recompute the canonical DKP for the last KvK using the active
   // profile's weights (LK 10/20/50 vs SoC 10/30/80). Lets admin
   // compare against the applicant-reported `previousKvkDkp` to
@@ -244,7 +264,7 @@ async function enrichApplicationDetail(
       prevKvkDeathsN: item.prevKvkDeathsN,
       prevKvkRank: item.prevKvkRank ?? null,
       prevKvkScanActiveCount: item.prevKvkScanActiveCount ?? null,
-      detectedSeed: item.detectedSeed ?? null,
+      detectedSeed: detectedSeed ?? null,
       spendingTier: item.spendingTier as SpendingTier | null,
       scoringProfile: item.scoringProfile as ScoringProfile | null,
     },
@@ -261,6 +281,9 @@ async function enrichApplicationDetail(
 
   return {
     ...item,
+    // Expose the resolved seed (db value or back-filled from currentKingdom)
+    // so the admin UI shows it consistently for legacy + new applicants.
+    detectedSeed: detectedSeed ?? null,
     percentiles,
     driftFlags,
     prevKvkDkpComputed,
