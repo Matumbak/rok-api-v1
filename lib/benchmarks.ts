@@ -336,10 +336,21 @@ export async function rebuildBenchmark(
   kvkId: KvkId,
   seed: SeedBucket = "general",
 ): Promise<void> {
-  const uploads = await prisma.benchmarkUpload.findMany({
-    where: { kvkId, seed },
-    select: { stats: true, rowCount: true },
-  });
+  // Special-case soc:general — it represents the tier-blind average
+  // active SoC fighter across all seeds. Aggregate ALL soc uploads,
+  // not just the (rare) seed=general ones, so the main tier-blind
+  // score has a meaningful population baseline. For per-seed cells
+  // (soc:Imperium / A / B / C / D) we keep the strict filter.
+  const uploads =
+    kvkId === "soc" && seed === "general"
+      ? await prisma.benchmarkUpload.findMany({
+          where: { kvkId },
+          select: { stats: true, rowCount: true },
+        })
+      : await prisma.benchmarkUpload.findMany({
+          where: { kvkId, seed },
+          select: { stats: true, rowCount: true },
+        });
 
   if (uploads.length === 0) {
     await prisma.kvkBenchmark.deleteMany({ where: { kvkId, seed } });

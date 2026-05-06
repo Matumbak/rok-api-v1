@@ -413,19 +413,21 @@ export function computeScore(
   const vip = Number.parseInt(input.vipLevel, 10);
 
   // Lifetime expected = sum of per-KvK contributions across played
-  // history. We use p80 (top 20% of active fighters in each KvK), NOT
-  // p50 (median), as the per-KvK reference because:
+  // history, anchored at the **p90** of active fighters in each KvK
+  // (interpolated linearly between p80 and p95 since anchors only
+  // store p50/p80/p95/p99).
   //
-  //   - Out-of-KvK farming is genuinely rare in RoK — barb camps and
-  //     Lost Canyon contribute single-digit % of lifetime KP for typical
-  //     active accounts. ~95% of lifetime KP comes from KvKs themselves.
-  //   - Migration applicants self-select into the "active fighter" pool
-  //     by applying to a serious kingdom. The realistic baseline for
-  //     "what an active fighter contributes per KvK" is p80, not p50.
+  //   - Out-of-KvK farming is genuinely rare in RoK — ~95% of lifetime
+  //     KP comes from KvKs themselves.
+  //   - Migration applicants self-select into the "serious fighter"
+  //     pool. Top-10% per KvK matches the realistic ceiling for what
+  //     an applicant we'd hire would have done; p80 leaves too many
+  //     applicants with ratio >= 2× across ALL seeds, saturating the
+  //     curve and visually flattening per-seed differentiation.
   //
-  // So ratio = applicant_lifetime / sum(p80 × played KvKs) = 1× means
-  // "you're a typical active migration-applicant fighter for your age".
-  // 2× = strong, 4× = whale-tier, 8× = kraken.
+  // ratio = 1× now means "you're a strong active fighter (top-10% per
+  // KvK on average)". 2× = exceptional, 4× = kraken-tier.
+  const p90 = (a: PercentileAnchors) => a.p80 + (a.p95 - a.p80) * (2 / 3);
   let expKp = 0;
   let expT5 = 0;
   let expDeaths = 0;
@@ -435,9 +437,9 @@ export function computeScore(
   let valorRefP80 = 0;
   for (const k of played) {
     const b = lookup(k, seedFor(k));
-    expKp += b.kp.p80;
-    expT5 += b.t5.p80;
-    expDeaths += b.deaths.p80;
+    expKp += p90(b.kp);
+    expT5 += p90(b.t5);
+    expDeaths += p90(b.deaths);
     if (b.acclaim.p80 > valorRefP80) valorRefP80 = b.acclaim.p80;
   }
   const expValor = valorRefP80 * 1.5;
