@@ -36,11 +36,31 @@ export type ParseResult =
     }
   | { ok: false; error: string };
 
-/* ── header aliases for the four "must-have" native fields ─────────── */
+/* ── header aliases for the four "must-have" native fields ─────────────
+ * Different DKP-export tools name the same columns slightly differently.
+ * Add new aliases here when an unusual export fails with
+ * "missing_required_columns". */
 const NATIVE_ALIASES: Record<"governorId" | "nickname" | "alliance", string[]> = {
-  governorId: ["Gov ID", "Governor ID", "ID", "Player ID"],
-  nickname: ["Name", "Nickname", "Governor", "Player"],
-  alliance: ["Alliance", "Tag", "Guild"],
+  governorId: [
+    "Gov ID",
+    "Governor ID",
+    "GovernorId",
+    "GovId",
+    "ID",
+    "Player ID",
+    "PlayerId",
+  ],
+  nickname: [
+    "Name",
+    "Nickname",
+    "Governor",
+    "Governor Name",
+    "GovernorName",
+    "Player",
+    "Player Name",
+    "PlayerName",
+  ],
+  alliance: ["Alliance", "Tag", "Guild", "Clan"],
 };
 
 /* ── helpers ───────────────────────────────────────────────────────── */
