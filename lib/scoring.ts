@@ -412,21 +412,20 @@ export function computeScore(
     k === "soc" && input.detectedSeed ? input.detectedSeed : undefined;
   const vip = Number.parseInt(input.vipLevel, 10);
 
-  // Lifetime expected. Naive math is "sum of per-KvK p50 across played
-  // KvKs", but that captures ONLY in-KvK contributions. Real lifetime
-  // stats include massive out-of-KvK accumulation:
-  //   KP — pre-KvK1 grind, daily barbs/Lost Canyon/Holy Sites, T1 farm
-  //   T5 — daily kingdom events with T5, holy site fights
-  //   Deaths — mostly in-KvK but some PvP / failed holy sites
-  // Empirically (from real applicants vs sum-of-medians), out-of-KvK
-  // contribution dominates lifetime KP by ~5-7×; less for T5/deaths.
-  // Without these multipliers, every applicant gets 20-30× ratios and
-  // maxes out the curve trivially (Matumba 1.8B KP / 58M expected = 30×
-  // → score 18/18 even though they're a mid-tier player).
-  const LIFETIME_KP_MULTIPLIER = 6;
-  const LIFETIME_T5_MULTIPLIER = 2;
-  const LIFETIME_DEATHS_MULTIPLIER = 1.2;
-
+  // Lifetime expected = sum of per-KvK contributions across played
+  // history. We use p80 (top 20% of active fighters in each KvK), NOT
+  // p50 (median), as the per-KvK reference because:
+  //
+  //   - Out-of-KvK farming is genuinely rare in RoK — barb camps and
+  //     Lost Canyon contribute single-digit % of lifetime KP for typical
+  //     active accounts. ~95% of lifetime KP comes from KvKs themselves.
+  //   - Migration applicants self-select into the "active fighter" pool
+  //     by applying to a serious kingdom. The realistic baseline for
+  //     "what an active fighter contributes per KvK" is p80, not p50.
+  //
+  // So ratio = applicant_lifetime / sum(p80 × played KvKs) = 1× means
+  // "you're a typical active migration-applicant fighter for your age".
+  // 2× = strong, 4× = whale-tier, 8× = kraken.
   let expKp = 0;
   let expT5 = 0;
   let expDeaths = 0;
@@ -436,15 +435,11 @@ export function computeScore(
   let valorRefP80 = 0;
   for (const k of played) {
     const b = lookup(k, seedFor(k));
-    expKp += b.kp.p50;
-    expT5 += b.t5.p50;
-    expDeaths += b.deaths.p50;
+    expKp += b.kp.p80;
+    expT5 += b.t5.p80;
+    expDeaths += b.deaths.p80;
     if (b.acclaim.p80 > valorRefP80) valorRefP80 = b.acclaim.p80;
   }
-  // Apply lifetime multipliers (see comment above where they're declared).
-  expKp *= LIFETIME_KP_MULTIPLIER;
-  expT5 *= LIFETIME_T5_MULTIPLIER;
-  expDeaths *= LIFETIME_DEATHS_MULTIPLIER;
   const expValor = valorRefP80 * 1.5;
 
   // Discount KP by low-tier share — a T1-trader has inflated KP.
