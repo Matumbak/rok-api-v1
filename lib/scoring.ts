@@ -265,16 +265,25 @@ export function ageMonthsFromDate(born: Date | null): number {
   return Math.max(0, m);
 }
 
-/** Component caps (max pts). Sum to 100; sanity penalties subtract. */
+/** Component caps (max pts). Sum to 100; sanity penalties subtract.
+ *
+ *  Power was halved (16 → 8) per user direction: in late-game RoK current
+ *  power is mostly a function of spending + commander gear, not how the
+ *  applicant actually fights. The freed 8 points were redistributed to
+ *  the two real war-output dimensions:
+ *    killPoints +4 (lifetime KvK output)
+ *    prevKvkDkp +4 (last-KvK cycle output, both absolute + rank)
+ *  Total stays at 100 so admin score thresholds (80/60/40/20) keep
+ *  meaning. */
 const CAPS = {
   age: 10,
   vip: 6,
-  power: 16, // current power vs latest-KvK distribution percentile
-  killPoints: 18, // ratio: actual / sum(p50 of kp across played KvKs)
+  power: 8, // current power vs latest-KvK distribution percentile (was 16)
+  killPoints: 22, // ratio: actual / sum(p50 of kp across played KvKs) (was 18)
   deaths: 12,
   valor: 8, // max valor vs cumulative-acclaim estimate
   t5Kills: 14,
-  prevKvkDkp: 16, // applicant's prevKvkDkp vs latest-KvK percentile (when provided)
+  prevKvkDkp: 20, // applicant's prevKvkDkp vs latest-KvK percentile (was 16)
 };
 // Total = 100
 
