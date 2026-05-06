@@ -306,17 +306,6 @@ model MigrationApplication {
 /// hardcoded. Drift is unbounded by design — current hardcoded anchors are
 /// based on limited research data, so empirical observations should
 /// dominate fast.
-/// LEGACY — replaced by KvkBenchmark + BenchmarkUpload (ratio-based scoring).
-/// Kept temporarily so we can drop it cleanly in a follow-up commit.
-model ScoringCalibration {
-  cohortKey   String   @id
-  anchors     Json
-  sampleCount Int
-  updatedAt   DateTime @updatedAt
-
-  @@map("scoring_calibration")
-}
-
 /// Per-KvK population distribution from uploaded DKP scans. The KEY data
 /// structure for the ratio-based scoring system: an applicant's expected
 /// LIFETIME stats are computed by summing the p50 of stats across the
