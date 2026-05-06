@@ -345,6 +345,48 @@ model KvkBenchmark {
   @@map("kvk_benchmarks")
 }
 
+/// Snapshot of all RoK kingdoms with their seed-group assignment from
+/// HeroScrolls (heroscroll.com/rok/seeds). Lets admin cross-reference
+/// an applicant's source kingdom against the broader population:
+/// "applicant came from kingdom 3091 → Group B → mid-tier" at a glance.
+///
+/// Seed assignment mirrors HeroScrolls' algorithm:
+///   ranks 1-24                 → "Imperium"  (Elite 24)
+///   next quarter of remaining  → "A"         (Group A — strongest)
+///   next quarter               → "B"
+///   next quarter               → "C"
+///   bottom quarter             → "D"
+///
+/// Refreshed by scripts/import-heroscroll-seeds.ts (one-shot scrape +
+/// upsert). Re-run periodically to track kingdom drift between groups.
+model KingdomSeed {
+  /// In-game kingdom number (e.g. 4028, 3091).
+  kingdomId           Int      @id
+  /// "Imperium" | "A" | "B" | "C" | "D"
+  seed                String
+  /// Global rank from HeroScrolls (1 = strongest by composite rating).
+  rank                Int
+  /// Aggregate stats — sum across the kingdom's top 300 governors.
+  totalPower          Float
+  totalKillpoints     Float
+  totalDeads          Float
+  totalTroopPower     Float
+  totalAcclaim        Float
+  /// Player counts. ch25 = governors at city hall 25.
+  playerCount         Int
+  ch25Count           Int
+  domainCount         Int
+  inactivePlayerCount Int
+  /// HeroScrolls scrape metadata.
+  scrapedTimestamp    String   // "YYYY-MM-DD" (the day heroscroll's data ref's to)
+  lastUpdated         BigInt   // unix ms — last time heroscroll refreshed this row
+  importedAt          DateTime @default(now()) @updatedAt
+
+  @@index([seed])
+  @@index([rank])
+  @@map("kingdom_seeds")
+}
+
 /// Audit trail of DKP-scan uploads that fed KvkBenchmark. Stores
 /// per-upload aggregates only — NO raw rows. Lets admin remove a bad
 /// upload (e.g. typo on kvkId, irrelevant kingdom) and rebuild benchmarks
