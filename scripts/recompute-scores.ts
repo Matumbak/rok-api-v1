@@ -12,8 +12,16 @@
 
 import { prisma } from "../lib/db";
 import { computeApplicantScore, type ScoringProfile, type SpendingTier } from "../lib/scoring";
+import { rebuildAllBenchmarks, loadBenchmarkLookup } from "../lib/benchmarks";
 
 async function main() {
+  // Rebuild benchmarks first so cached KvkBenchmark rows reflect current
+  // BenchmarkUpload state + current code logic (avoids stale state when
+  // benchmark calc rules change between runs).
+  console.log("Rebuilding benchmarks...");
+  await rebuildAllBenchmarks();
+  const lookup = await loadBenchmarkLookup();
+
   const apps = await prisma.migrationApplication.findMany({
     select: {
       id: true,
@@ -67,7 +75,7 @@ async function main() {
       detectedSeed: app.detectedSeed ?? null,
       spendingTier: app.spendingTier as SpendingTier | null,
       scoringProfile: app.scoringProfile as ScoringProfile | null,
-    });
+    }, lookup);
 
     const oldScore = app.overallScore;
     const oldTags = Array.isArray(app.tags) ? (app.tags as string[]) : [];
