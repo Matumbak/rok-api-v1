@@ -98,12 +98,15 @@ function runCases(label: string, base: Omit<ScoreInputs, "spendingTier">) {
   for (const tier of tiers) {
     const r = computeScore({ ...base, spendingTier: tier });
     const b = r.breakdown;
+    const ratios = b.ratios;
     console.log(
       `  ${tier.padEnd(7)} score=${String(r.score).padStart(5)}  ` +
         `pwr=${b.power.toFixed(1).padStart(4)} kp=${b.killPoints.toFixed(1).padStart(4)} ` +
         `dth=${b.deaths.toFixed(1).padStart(4)} val=${b.valor.toFixed(1).padStart(4)} ` +
         `t5=${b.t5Kills.toFixed(1).padStart(4)} prv=${b.prevKvkDkp.toFixed(1).padStart(4)}  ` +
-        `tier=${b.spendingModifier.toFixed(1).padStart(6)} sanity=${b.sanityPenalty.toFixed(0).padStart(3)}  ` +
+        `kvks=${r.playedKvks.length} kp×=${ratios.killPoints?.toFixed(1) ?? "—"} ` +
+        `t5×=${ratios.t5Kills?.toFixed(1) ?? "—"} ` +
+        `sanity=${b.sanityPenalty.toFixed(0).padStart(3)}  ` +
         `tags=[${r.tags.join(",")}]`,
     );
   }

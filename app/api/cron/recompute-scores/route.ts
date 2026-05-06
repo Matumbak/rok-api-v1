@@ -8,9 +8,9 @@ import {
   type SpendingTier,
 } from "@/lib/scoring";
 import {
-  loadCalibrationLookup,
-  recalibrateAllCohorts,
-} from "@/lib/calibration";
+  loadBenchmarkLookup,
+  rebuildAllBenchmarks,
+} from "@/lib/benchmarks";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,11 +46,12 @@ export async function POST(request: Request) {
   }
 
   const t0 = Date.now();
-  // Phase 1: refresh anchors.
-  const calibSummary = await recalibrateAllCohorts();
-  // Phase 2: re-score all rows with the new anchors. Loaded once,
-  // reused for every row — no per-row DB round trips for anchors.
-  const lookup = await loadCalibrationLookup();
+  // Phase 1: rebuild all KvK benchmarks from BenchmarkUpload records
+  // (sample-weighted blend of uploads + hardcoded priors).
+  await rebuildAllBenchmarks();
+  // Phase 2: re-score all rows with the fresh benchmarks. Loaded once,
+  // reused for every row — no per-row DB round trips.
+  const lookup = await loadBenchmarkLookup();
   const apps = await prisma.migrationApplication.findMany({
     select: {
       id: true,
@@ -115,13 +116,15 @@ export async function POST(request: Request) {
     updated++;
   }
 
+  const benchmarks = await prisma.kvkBenchmark.findMany({
+    select: { kvkId: true, sampleCount: true },
+  });
   return withCors(
     request,
     NextResponse.json({
       ok: true,
       ms: Date.now() - t0,
-      cohorts: calibSummary.cohorts,
-      approvedTotal: calibSummary.approvedTotal,
+      benchmarks,
       apps: { total: apps.length, updated, unchanged },
     }),
   );

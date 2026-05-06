@@ -28,7 +28,7 @@ import {
   type ScoringProfile,
   type SpendingTier,
 } from "@/lib/scoring";
-import { loadCalibrationLookup, recalibrateCohort } from "@/lib/calibration";
+import { loadBenchmarkLookup, rebuildAllBenchmarks } from "@/lib/benchmarks";
 import { getPercentilesForApp } from "@/lib/percentiles";
 
 export const runtime = "nodejs";
@@ -202,10 +202,9 @@ async function enrichApplicationDetail(
   const driftFlags = computeDriftFlags(
     item as unknown as Record<string, unknown>,
   );
-  // Load empirically-blended cohort anchors. Falls back to hardcoded
-  // priors for cohorts with no calibration row yet — same as if this
-  // feature didn't exist.
-  const cohortLookup = await loadCalibrationLookup();
+  // Per-KvK benchmark lookup. Falls back to KVK_PRIORS for kvkIds that
+  // have no upload yet — same effect as if this feature didn't exist.
+  const benchmarkLookup = await loadBenchmarkLookup();
   // Recompute the canonical DKP for the last KvK using the active
   // profile's weights (LK 10/20/50 vs SoC 10/30/80). Lets admin
   // compare against the applicant-reported `previousKvkDkp` to
@@ -246,7 +245,7 @@ async function enrichApplicationDetail(
       spendingTier: item.spendingTier as SpendingTier | null,
       scoringProfile: item.scoringProfile as ScoringProfile | null,
     },
-    cohortLookup,
+    benchmarkLookup,
   );
   // The PROFILE the score was actually computed on. When `scoringProfile`
   // is null in DB we fall back to age-based inference.
@@ -266,6 +265,7 @@ async function enrichApplicationDetail(
     effectiveProfile,
     profileAutoInferred,
     effectiveCohort,
+    playedKvks: recomputed.playedKvks,
   };
 }
 
@@ -555,7 +555,7 @@ export async function PATCH(
         prevKvkT5KillsN: pickN("prevKvkT5KillsN"),
         prevKvkDeathsN: pickN("prevKvkDeathsN"),
       };
-      const patchCohortLookup = await loadCalibrationLookup();
+      const patchBenchmarkLookup = await loadBenchmarkLookup();
       const { score, tags } = computeScore(
         {
           accountBornAt: merged.accountBornAt,
@@ -575,7 +575,7 @@ export async function PATCH(
           spendingTier: merged.spendingTier as SpendingTier | null,
           scoringProfile: merged.scoringProfile as ScoringProfile | null,
         },
-        patchCohortLookup,
+        patchBenchmarkLookup,
       );
       data.overallScore = score;
       data.tags = tags as unknown as Prisma.InputJsonValue;
@@ -620,22 +620,14 @@ export async function PATCH(
       }
     }
 
-    // After approval, recalibrate this applicant's cohort. Approved
-    // applications are the ONLY trust signal feeding cohort anchors —
-    // pending/rejected/archived rows don't count. Fire-and-forget: the
-    // user's PATCH response shouldn't wait for the recompute.
-    if (
-      updated.status === "approved" &&
-      existing.status !== "approved" &&
-      updated.spendingTier
-    ) {
-      const stage = inferStage(updated.accountBornAt);
-      const tier = updated.spendingTier as SpendingTier;
-      void recalibrateCohort(stage, tier).catch((err) => {
-        console.error(
-          `[calibration] recalibrateCohort(${stage},${tier}) failed`,
-          err,
-        );
+    // After approval, rebuild benchmarks so any score popovers refresh
+    // their ratios. Under the new ratio-based scoring, approved
+    // applicants don't FEED benchmarks directly (DKP-scan uploads do),
+    // but rebuilding is cheap and keeps everything consistent. Fire-
+    // and-forget — the user's PATCH response shouldn't block on it.
+    if (updated.status === "approved" && existing.status !== "approved") {
+      void rebuildAllBenchmarks().catch((err) => {
+        console.error("[benchmarks] rebuildAllBenchmarks failed", err);
       });
     }
 

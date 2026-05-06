@@ -306,15 +306,59 @@ model MigrationApplication {
 /// hardcoded. Drift is unbounded by design — current hardcoded anchors are
 /// based on limited research data, so empirical observations should
 /// dominate fast.
+/// LEGACY — replaced by KvkBenchmark + BenchmarkUpload (ratio-based scoring).
+/// Kept temporarily so we can drop it cleanly in a follow-up commit.
 model ScoringCalibration {
-  /// Composite key: "<stage>:<tier>", e.g. "soc-mature:kraken".
   cohortKey   String   @id
-  /// JSON: { power: {p50,p80,p95,p99}, killPoints: {...}, deaths: {...},
-  ///         valor: {...}, t5Kills: {...}, prevKvkDkp: {...} }
   anchors     Json
-  /// Number of approved applications used to compute these anchors.
   sampleCount Int
   updatedAt   DateTime @updatedAt
 
   @@map("scoring_calibration")
+}
+
+/// Per-KvK population distribution from uploaded DKP scans. The KEY data
+/// structure for the ratio-based scoring system: an applicant's expected
+/// LIFETIME stats are computed by summing the p50 of stats across the
+/// KvKs they're estimated to have played (based on accountBornAt). Their
+/// score derives from how their actual lifetime stats compare to that
+/// expectation.
+///
+/// One row per KvK identifier. Single-KvK distributions of active fighters:
+/// power (current at end of KvK), kp (during KvK), t5/deaths (during KvK),
+/// acclaim (single-KvK valor earned), dkp (composite DKP for that KvK).
+///
+/// Bootstrap with hardcoded priors in lib/scoring.ts; once any
+/// BenchmarkUpload exists for a kvkId the priors are blended out via
+/// sample-weighted averaging.
+model KvkBenchmark {
+  /// "kvk1" | "kvk2" | "kvk3" | "kvk4" | "soc"
+  kvkId       String   @id
+  /// JSON: per-stat percentiles. Shape:
+  /// { power:{p50,p80,p95,p99}, kp:{...}, t5:{...}, deaths:{...},
+  ///   acclaim:{...}, dkp:{...} }
+  stats       Json
+  /// Total active-fighter samples summed across all uploads for this kvkId.
+  sampleCount Int
+  updatedAt   DateTime @updatedAt
+
+  @@map("kvk_benchmarks")
+}
+
+/// Audit trail of DKP-scan uploads that fed KvkBenchmark. Stores
+/// per-upload aggregates only — NO raw rows. Lets admin remove a bad
+/// upload (e.g. typo on kvkId, irrelevant kingdom) and rebuild benchmarks
+/// without that contribution.
+model BenchmarkUpload {
+  id          String   @id @default(cuid())
+  kvkId       String
+  /// Free-form, e.g. "kingdom 3801 KvK4 export, Apr 2026".
+  notes       String?
+  rowCount    Int
+  /// Same shape as KvkBenchmark.stats — but for THIS upload only.
+  stats       Json
+  uploadedAt  DateTime @default(now())
+
+  @@index([kvkId, uploadedAt])
+  @@map("benchmark_uploads")
 }
