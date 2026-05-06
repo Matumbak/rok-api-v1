@@ -114,13 +114,17 @@ function percentileScore(
 ): number {
   if (value == null || !Number.isFinite(value) || value <= 0) return 0;
   const { p50, p80, p95, p99 } = anchors;
+  // p90 interpolated linearly from p80/p95 (we don't store it explicitly).
+  const p90 = p80 + (p95 - p80) * (2 / 3);
   if (p50 <= 0) {
     if (value <= p99) return 0.4 + (value / p99) * 0.6;
     return 1.0;
   }
   if (value <= p50) return (value / p50) * 0.4;
-  if (value <= p80) return 0.4 + ((value - p50) / (p80 - p50)) * 0.3;
-  if (value <= p95) return 0.7 + ((value - p80) / (p95 - p80)) * 0.2;
+  // Curve breakpoint at p90 (top 10% = "active fighter" baseline used
+  // throughout the rest of scoring), not p80. value at p90 → 0.80.
+  if (value <= p90) return 0.4 + ((value - p50) / (p90 - p50)) * 0.4;
+  if (value <= p95) return 0.8 + ((value - p90) / (p95 - p90)) * 0.1;
   if (value <= p99) return 0.9 + ((value - p95) / (p99 - p95)) * 0.1;
   return 1.0;
 }
@@ -434,7 +438,7 @@ export function computeScore(
   // For valor, max-ever-held doesn't sum like cumulative kills — use
   // 1.5× the highest-acclaim-p80 of played KvKs as a rough estimate of
   // "max valor someone in this stage might have at peak".
-  let valorRefP80 = 0;
+  let valorRefP90 = 0;
   for (const k of played) {
     const b = lookup(k, seedFor(k));
     expKp += p90(b.kp);
@@ -446,9 +450,9 @@ export function computeScore(
     // single-KvK acclaim p90 they could plausibly have hit, taken
     // as MAX across their played KvKs (their best opportunity).
     const acclaimP90 = p90(b.acclaim);
-    if (acclaimP90 > valorRefP80) valorRefP80 = acclaimP90;
+    if (acclaimP90 > valorRefP90) valorRefP90 = acclaimP90;
   }
-  const expValor = valorRefP80;
+  const expValor = valorRefP90;
 
   // Discount KP by low-tier share — a T1-trader has inflated KP.
   const ltShare = lowTierKpShare(
