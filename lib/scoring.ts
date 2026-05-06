@@ -78,6 +78,27 @@ function ratioToScore(r: number): number {
   return 1.0;
 }
 
+/** Map a rank-percentile (1.0 = best in kingdom, 0.0 = worst) onto a
+ *  score band. Tail-heavy: rewards top-of-kingdom finishes hard,
+ *  passes median quickly, doesn't crash bottom performers as much
+ *  (everyone who showed up and fought deserves something).
+ *
+ *    pct = 1.000 (rank 1 of N)     → 1.00
+ *    pct = 0.99  (top 1%)          → 0.95
+ *    pct = 0.95  (top 5%)          → 0.85
+ *    pct = 0.80  (top 20%)         → 0.65
+ *    pct = 0.50  (median)          → 0.40
+ *    pct = 0.10  (bottom 10%)      → 0.10 */
+function rankToScore(pct: number): number {
+  if (!Number.isFinite(pct) || pct <= 0) return 0;
+  if (pct >= 1) return 1.0;
+  if (pct <= 0.5) return pct * 0.8; // 0..0.40
+  if (pct <= 0.8) return 0.4 + (pct - 0.5) * (0.25 / 0.3); // 0.40..0.65
+  if (pct <= 0.95) return 0.65 + (pct - 0.8) * (0.20 / 0.15); // 0.65..0.85
+  if (pct <= 0.99) return 0.85 + (pct - 0.95) * (0.10 / 0.04); // 0.85..0.95
+  return 0.95 + (pct - 0.99) * (0.05 / 0.01); // 0.95..1.00
+}
+
 /** Map an arbitrary value into the 0..1 score band of a percentile
  *  distribution. Uses linear interpolation between p50/p80/p95/p99. */
 export interface PercentileAnchors {
@@ -307,6 +328,12 @@ export interface ScoreInputs {
   prevKvkT4KillsN: number | null;
   prevKvkT5KillsN: number | null;
   prevKvkDeathsN: number | null;
+  /** Position within the source-kingdom DKP scan (1-based, lower = better).
+   *  Null when applicant didn't attach a DKP scan. */
+  prevKvkRank: number | null;
+  /** Total active fighters in that scan. Denominator for the rank
+   *  percentile. Null when no scan attached. */
+  prevKvkScanActiveCount: number | null;
   spendingTier: SpendingTier | null;
   scoringProfile: ScoringProfile | null;
 }
@@ -330,6 +357,15 @@ export interface ScoreBreakdown {
     deaths: number | null;
     valor: number | null;
   };
+  /** Position within applicant's source-kingdom scan, when provided.
+   *  rank/total = "top X% of fighters in their KvK". Null when no scan
+   *  was attached at submit time. */
+  prevKvkPosition: {
+    rank: number;
+    total: number;
+    /** rank as a fraction of "fighters BEHIND you", 0..1 (1 = best). */
+    pct: number;
+  } | null;
 }
 
 export interface ScoreResult {
@@ -412,19 +448,51 @@ export function computeScore(
   const latestBench = lookup(latestKvk);
   const powerScore = percentileScore(input.powerN, latestBench.power) * CAPS.power;
 
-  // PrevKvkDkp: only scored if applicant supplied prevKvk* data. Compares
-  // their single-KvK output to that KvK's dkp distribution. When played
-  // is empty (too young), no comparison possible.
+  // PrevKvkDkp: scored from TWO complementary signals when both present.
+  //   (a) Absolute output — applicant's prevKvkDkp vs the population
+  //       distribution at this kvkId (benchmark). Catches "did your
+  //       cycle output match what people in your phase typically post?"
+  //   (b) Position — applicant's RANK within their source-kingdom's
+  //       active fighters (rank / activeCount). Catches "you carried
+  //       your kingdom's KvK regardless of absolute scale" — important
+  //       when the kingdom was small or the match-up was easy/hard.
+  // Combined 60% absolute + 40% position. When position data is missing
+  // (no scan attached), absolute carries the whole component.
   const prevDkp = computePrevKvkDkp(
     input.prevKvkT4KillsN,
     input.prevKvkT5KillsN,
     input.prevKvkDeathsN,
     profile,
   );
-  const prevDkpScore =
-    prevDkp != null && played.length > 0
-      ? percentileScore(prevDkp, lookup(latestKvk).dkp) * CAPS.prevKvkDkp
-      : 0;
+  let prevDkpScore = 0;
+  let prevKvkPositionInfo:
+    | { rank: number; total: number; pct: number }
+    | null = null;
+  if (prevDkp != null && played.length > 0) {
+    const absoluteFrac = percentileScore(prevDkp, lookup(latestKvk).dkp);
+    let positionFrac: number | null = null;
+    if (
+      input.prevKvkRank != null &&
+      input.prevKvkScanActiveCount != null &&
+      input.prevKvkScanActiveCount > 0 &&
+      input.prevKvkRank > 0
+    ) {
+      // pct = fraction of fighters BEHIND the applicant
+      // (1 - (rank-1)/total) → rank=1 in 1000 → 1.000, rank=500 → 0.501.
+      const pct = 1 - (input.prevKvkRank - 1) / input.prevKvkScanActiveCount;
+      positionFrac = rankToScore(pct);
+      prevKvkPositionInfo = {
+        rank: input.prevKvkRank,
+        total: input.prevKvkScanActiveCount,
+        pct: round2(pct),
+      };
+    }
+    const blended =
+      positionFrac != null
+        ? absoluteFrac * 0.6 + positionFrac * 0.4
+        : absoluteFrac;
+    prevDkpScore = blended * CAPS.prevKvkDkp;
+  }
 
   // Age & VIP: capped scaling. Age uses month-pivot of 36 (3 years = max);
   // vip uses 25.
@@ -570,6 +638,7 @@ export function computeScore(
         deaths: deathsRatio != null ? round2(deathsRatio) : null,
         valor: valorRatio != null ? round2(valorRatio) : null,
       },
+      prevKvkPosition: prevKvkPositionInfo,
     },
   };
 }

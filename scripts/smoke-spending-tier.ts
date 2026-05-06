@@ -30,6 +30,8 @@ const baseLk = {
   prevKvkT4KillsN: 800_000,
   prevKvkT5KillsN: 400_000,
   prevKvkDeathsN: 600_000,
+  prevKvkRank: null,
+  prevKvkScanActiveCount: null,
   scoringProfile: "lost-kingdom" as const,
 };
 
@@ -48,6 +50,8 @@ const matumba = {
   prevKvkT4KillsN: 800_000,
   prevKvkT5KillsN: 400_000,
   prevKvkDeathsN: 600_000,
+  prevKvkRank: null,
+  prevKvkScanActiveCount: null,
   scoringProfile: "season-of-conquest" as const,
 };
 
@@ -67,6 +71,8 @@ const realKrakenLK = {
   prevKvkT4KillsN: 5_000_000,
   prevKvkT5KillsN: 4_500_000,
   prevKvkDeathsN: 8_000_000,
+  prevKvkRank: null,
+  prevKvkScanActiveCount: null,
   scoringProfile: "lost-kingdom" as const,
 };
 
@@ -89,6 +95,8 @@ const realKrakenSoC = {
   prevKvkT4KillsN: 80_000_000,
   prevKvkT5KillsN: 200_000_000,
   prevKvkDeathsN: 250_000_000,
+  prevKvkRank: 5,
+  prevKvkScanActiveCount: 2400,
   scoringProfile: "season-of-conquest" as const,
 };
 

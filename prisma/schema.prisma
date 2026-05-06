@@ -177,6 +177,17 @@ model MigrationApplication {
   prevKvkT5KillsN      Float?
   prevKvkDeathsN       Float?
 
+  /// Position within the applicant's kingdom-of-origin DKP scan.
+  /// Captured from the matched DKP-scan row when the applicant uploads
+  /// their KvK export at submission. Lets scoring reward "you ranked
+  /// top-50 in a 2400-player scan" independently of absolute output —
+  /// useful for applicants from small or weak-match kingdoms whose
+  /// absolute numbers look modest but who clearly carried their cycle.
+  prevKvkRank             Int?
+  /// Total ACTIVE fighters in that DKP scan (filtered by dkp > 0 OR
+  /// t5 > 100K). Denominator for the rank percentile.
+  prevKvkScanActiveCount  Int?
+
   /// What OCR / DKP-lookup auto-filled at submit time, per watched
   /// field. Used to compute drift flags in admin: if the applicant's
   /// final value diverges by >5% from what was auto-detected, an

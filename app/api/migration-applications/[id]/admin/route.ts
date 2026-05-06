@@ -242,6 +242,8 @@ async function enrichApplicationDetail(
       prevKvkT4KillsN: item.prevKvkT4KillsN,
       prevKvkT5KillsN: item.prevKvkT5KillsN,
       prevKvkDeathsN: item.prevKvkDeathsN,
+      prevKvkRank: item.prevKvkRank ?? null,
+      prevKvkScanActiveCount: item.prevKvkScanActiveCount ?? null,
       spendingTier: item.spendingTier as SpendingTier | null,
       scoringProfile: item.scoringProfile as ScoringProfile | null,
     },
@@ -514,6 +516,8 @@ export async function PATCH(
           prevKvkT4KillsN: true,
           prevKvkT5KillsN: true,
           prevKvkDeathsN: true,
+          prevKvkRank: true,
+          prevKvkScanActiveCount: true,
         },
       });
       const dataRec = data as Record<string, unknown>;
@@ -554,6 +558,8 @@ export async function PATCH(
         prevKvkT4KillsN: pickN("prevKvkT4KillsN"),
         prevKvkT5KillsN: pickN("prevKvkT5KillsN"),
         prevKvkDeathsN: pickN("prevKvkDeathsN"),
+        prevKvkRank: pickN("prevKvkRank"),
+        prevKvkScanActiveCount: pickN("prevKvkScanActiveCount"),
       };
       const patchBenchmarkLookup = await loadBenchmarkLookup();
       const { score, tags } = computeScore(
@@ -572,6 +578,8 @@ export async function PATCH(
           prevKvkT4KillsN: merged.prevKvkT4KillsN,
           prevKvkT5KillsN: merged.prevKvkT5KillsN,
           prevKvkDeathsN: merged.prevKvkDeathsN,
+          prevKvkRank: merged.prevKvkRank,
+          prevKvkScanActiveCount: merged.prevKvkScanActiveCount,
           spendingTier: merged.spendingTier as SpendingTier | null,
           scoringProfile: merged.scoringProfile as ScoringProfile | null,
         },

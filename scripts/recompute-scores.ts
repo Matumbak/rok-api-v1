@@ -33,6 +33,8 @@ async function main() {
       prevKvkT4KillsN: true,
       prevKvkT5KillsN: true,
       prevKvkDeathsN: true,
+      prevKvkRank: true,
+      prevKvkScanActiveCount: true,
       spendingTier: true,
       scoringProfile: true,
       overallScore: true,
@@ -59,6 +61,8 @@ async function main() {
       prevKvkT4KillsN: app.prevKvkT4KillsN,
       prevKvkT5KillsN: app.prevKvkT5KillsN,
       prevKvkDeathsN: app.prevKvkDeathsN,
+      prevKvkRank: app.prevKvkRank ?? null,
+      prevKvkScanActiveCount: app.prevKvkScanActiveCount ?? null,
       spendingTier: app.spendingTier as SpendingTier | null,
       scoringProfile: app.scoringProfile as ScoringProfile | null,
     });

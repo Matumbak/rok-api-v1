@@ -90,6 +90,13 @@ export const submitSchema = z.object({
   prevKvkT5Kills: z.string().max(40).optional().nullable(),
   prevKvkDeaths: z.string().max(40).optional().nullable(),
 
+  /// Position within the applicant's source-kingdom DKP scan.
+  /// Both fields come from the /api/dkp/lookup response when the
+  /// applicant uploads their KvK export at submit time. Used by
+  /// scoring as a position signal independent of absolute output.
+  prevKvkRank: z.number().int().min(1).optional().nullable(),
+  prevKvkScanActiveCount: z.number().int().min(1).optional().nullable(),
+
   /// ISO calendar date "YYYY-MM-DD" extracted from the Scout commander's
   /// recruit date — the account's birth day. Server stores as DateTime
   /// at UTC midnight.

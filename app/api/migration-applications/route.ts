@@ -103,6 +103,8 @@ export async function POST(request: Request) {
       prevKvkT4KillsN: normalized.prevKvkT4KillsN,
       prevKvkT5KillsN: normalized.prevKvkT5KillsN,
       prevKvkDeathsN: normalized.prevKvkDeathsN,
+      prevKvkRank: data.prevKvkRank ?? null,
+      prevKvkScanActiveCount: data.prevKvkScanActiveCount ?? null,
       spendingTier: data.spendingTier as SpendingTier,
       scoringProfile: (data.scoringProfile as ScoringProfile) ?? null,
     });
@@ -169,6 +171,9 @@ export async function POST(request: Request) {
         prevKvkT4KillsN: normalized.prevKvkT4KillsN,
         prevKvkT5KillsN: normalized.prevKvkT5KillsN,
         prevKvkDeathsN: normalized.prevKvkDeathsN,
+
+        prevKvkRank: data.prevKvkRank ?? null,
+        prevKvkScanActiveCount: data.prevKvkScanActiveCount ?? null,
 
         ocrAutofill:
           Object.keys(autofillNormalized).length > 0
