@@ -14,7 +14,11 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
+// Vercel serverless body limit on Hobby/Pro is 4.5MB by default — we
+// accept up to that. CSV is preferred for big rosters (raw text, no ZIP
+// overhead → typically 4-5× smaller than the equivalent xlsx).
+const MAX_FILE_BYTES = 4 * 1024 * 1024;
+const ACCEPTED_EXT = /\.(xlsx|xlsm|xls|csv|tsv)$/i;
 
 /** Header aliases we accept on the DKP-scan xlsx. Flexible because
  *  exports from different community tools name columns slightly
@@ -95,11 +99,14 @@ export async function POST(request: Request) {
     const kvkId = kvkIdField as KvkId;
     const notes = typeof notesField === "string" ? notesField.slice(0, 500) : null;
 
-    if (!/\.(xlsx|xlsm|xls)$/i.test(fileField.name)) {
+    if (!ACCEPTED_EXT.test(fileField.name)) {
       return withCors(
         request,
         NextResponse.json(
-          { error: "only .xlsx/.xlsm/.xls accepted" },
+          {
+            error: "unsupported_format",
+            accepted: ".xlsx, .xlsm, .xls, .csv, .tsv",
+          },
           { status: 400 },
         ),
       );
