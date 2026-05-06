@@ -744,26 +744,38 @@ export function computeApplicantScore(
     };
   }
 
+  // Seed-level tag is derived purely from PERFORMANCE, not home kingdom.
+  // Walk seeds top-down (Imperium → A → B → C → D); the first seed where
+  // the applicant clears the "mid" threshold (score ≥ 50) is the tier
+  // they fight at. If applicant fights like mid-D but lives in a B-seed
+  // kingdom, we tag them "d-seed-mid" — what they DO matters, not where
+  // they currently sit.
+  //
+  // Non-Imperium seeds cap the band at "mid": exceeding mid in (say)
+  // A-seed means the applicant should be tested against Imperium next.
+  // Only Imperium has high/top bands (since there's no seed above it).
+  // If applicant doesn't reach mid even in D-seed, they're below
+  // active-fighter baseline → tag "d-seed-low".
   let tags = main.tags;
-  if (
-    input.detectedSeed &&
-    perSeedScores &&
-    (input.detectedSeed === "Imperium" ||
-      input.detectedSeed === "A" ||
-      input.detectedSeed === "B" ||
-      input.detectedSeed === "C" ||
-      input.detectedSeed === "D")
-  ) {
-    const seedScore = perSeedScores[input.detectedSeed];
-    const band =
-      seedScore >= 85
-        ? "top"
-        : seedScore >= 65
-          ? "high"
-          : seedScore >= 40
-            ? "mid"
-            : "low";
-    tags = [...main.tags, `${input.detectedSeed.toLowerCase()}-seed-${band}`];
+  if (perSeedScores) {
+    const order: Seed[] = ["Imperium", "A", "B", "C", "D"];
+    const MID = 50;
+    const HIGH = 65;
+    const TOP = 85;
+    let tagOut: string | null = null;
+    for (const seed of order) {
+      const s = perSeedScores[seed];
+      if (s < MID) continue;
+      if (seed === "Imperium") {
+        const band = s >= TOP ? "top" : s >= HIGH ? "high" : "mid";
+        tagOut = `imperium-seed-${band}`;
+      } else {
+        tagOut = `${seed.toLowerCase()}-seed-mid`;
+      }
+      break;
+    }
+    if (!tagOut) tagOut = "d-seed-low";
+    tags = [...main.tags, tagOut];
   }
 
   return { main, perSeedScores, tags };
