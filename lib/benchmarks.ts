@@ -28,6 +28,32 @@ import {
   type PercentileAnchors,
 } from "@/lib/scoring";
 
+/** Seed-group bucket. Pre-SoC KvKs (kvk1-4) always use "general"
+ *  (no seed split — pre-SoC seeds aren't meaningful enough to bother).
+ *  SoC scans get partitioned by the source kingdom's seed, computed
+ *  from KingdomSeed lookups against the row-level KD column. */
+export type SeedBucket =
+  | "general"
+  | "Imperium"
+  | "A"
+  | "B"
+  | "C"
+  | "D";
+
+export const SEED_BUCKETS: SeedBucket[] = [
+  "general",
+  "Imperium",
+  "A",
+  "B",
+  "C",
+  "D",
+];
+
+/** Min rows per seed bucket before a SoC scan upload contributes to that
+ *  bucket's benchmark. Tiny shares (n=3 from a single AoC seed) would
+ *  add too much noise to the bucket's percentiles. */
+const MIN_SEED_BUCKET_ROWS = 20;
+
 const STAT_KEYS = [
   "power",
   "kp",
@@ -62,15 +88,14 @@ export interface ScanRow {
   kp: number | null; // KP gained DURING this KvK (T4 + T5)
   acclaim: number | null; // valor (acclaim) earned DURING this KvK
   dkp: number | null; // DKP composite DURING this KvK
+  /** Source kingdom_id from the row's KD column. Used during SoC
+   *  ingestion to look up the row's home seed. */
+  kd: number | null;
 }
 
-/** Compute the per-stat percentile distribution for an uploaded scan.
- *  Filters active fighters: dkp > 0 OR t5 > 100K. Returns the aggregate
- *  ready to persist as BenchmarkUpload.stats.
- *
- *  rowCount in the result is the count of ACTIVE fighters (after filter),
- *  not raw row count. That's what the weighted-blend math needs. */
-export function processScanForBenchmark(rows: ScanRow[]): {
+/** Compute the per-stat percentile distribution for a set of rows.
+ *  Filters active fighters: dkp > 0 OR t5 > 100K. */
+function rowsToStats(rows: ScanRow[]): {
   stats: KvkBenchmarkStats;
   rowCount: number;
 } {
@@ -105,9 +130,6 @@ export function processScanForBenchmark(rows: ScanRow[]): {
     const vals = buckets[k];
     vals.sort((a, b) => a - b);
     if (vals.length === 0) {
-      // No data for this stat — fall back to a tiny placeholder; shouldn't
-      // dominate after blending with priors. Caller can choose to drop
-      // this scan if pathological.
       stats[k] = { p50: 0, p80: 0, p95: 0, p99: 0 };
     } else {
       stats[k] = {
@@ -120,6 +142,146 @@ export function processScanForBenchmark(rows: ScanRow[]): {
   }
 
   return { stats, rowCount: active.length };
+}
+
+/** LK / "general" path — single bucket, all rows aggregated together.
+ *  Used for kvk1-4 uploads where seed splits aren't meaningful. */
+export function processScanForBenchmark(rows: ScanRow[]): {
+  stats: KvkBenchmarkStats;
+  rowCount: number;
+} {
+  return rowsToStats(rows);
+}
+
+/** SoC path — partition rows by their home-kingdom seed (looked up from
+ *  KingdomSeed via the KD column). Returns one aggregate per seed bucket
+ *  whose row count meets MIN_SEED_BUCKET_ROWS. Buckets with too few rows
+ *  fall through to "general" (still aggregated, won't update seed-
+ *  specific benchmarks).
+ *
+ *  classifierMode controls how seeds are determined for rows where the
+ *  KD-based lookup misses (kingdom not in KingdomSeed):
+ *    "kingdom_seed" → drop the row (Phase 1 / recent scans)
+ *    "auto_classify" → infer seed from row's stat signature (Phase 2,
+ *                     used when scan is older than the freshness window) */
+export async function processScanForSocBenchmark(
+  rows: ScanRow[],
+  classifierMode: "kingdom_seed" | "auto_classify" = "kingdom_seed",
+): Promise<
+  Array<{
+    seed: SeedBucket;
+    seedSource: "kingdom_seed" | "auto_classify" | "general";
+    stats: KvkBenchmarkStats;
+    rowCount: number;
+  }>
+> {
+  // Pre-load KingdomSeed map once.
+  const seedMap = new Map<number, string>(
+    (await prisma.kingdomSeed.findMany({
+      select: { kingdomId: true, seed: true },
+    })).map((k) => [k.kingdomId, k.seed]),
+  );
+
+  const partitions = new Map<SeedBucket, ScanRow[]>();
+  for (const seed of SEED_BUCKETS) partitions.set(seed, []);
+
+  // Phase 2 stub — auto-classification engine. Computes a row's seed
+  // from its stat signature against established seed benchmarks. Only
+  // kicks in when classifierMode === "auto_classify" AND we already
+  // have soc seed benchmarks loaded. Falls back to "general" otherwise.
+  let classifyFn: ((r: ScanRow) => SeedBucket) | null = null;
+  if (classifierMode === "auto_classify") {
+    classifyFn = await buildSocSeedClassifier();
+  }
+
+  for (const r of rows) {
+    let seed: SeedBucket | null = null;
+    if (r.kd != null && seedMap.has(r.kd)) {
+      const homeSeed = seedMap.get(r.kd)!;
+      if ((SEED_BUCKETS as string[]).includes(homeSeed)) {
+        seed = homeSeed as SeedBucket;
+      }
+    }
+    if (seed == null && classifyFn != null) {
+      seed = classifyFn(r);
+    }
+    if (seed == null) seed = "general";
+    partitions.get(seed)!.push(r);
+  }
+
+  const out: Array<{
+    seed: SeedBucket;
+    seedSource: "kingdom_seed" | "auto_classify" | "general";
+    stats: KvkBenchmarkStats;
+    rowCount: number;
+  }> = [];
+  for (const seed of SEED_BUCKETS) {
+    const rs = partitions.get(seed)!;
+    const { stats, rowCount } = rowsToStats(rs);
+    if (rowCount === 0) continue;
+    if (seed !== "general" && rowCount < MIN_SEED_BUCKET_ROWS) {
+      // Tiny seed bucket — skip. Don't roll into general either to keep
+      // the seed signal clean.
+      continue;
+    }
+    out.push({
+      seed,
+      seedSource:
+        seed === "general"
+          ? "general"
+          : classifierMode === "auto_classify"
+            ? "auto_classify"
+            : "kingdom_seed",
+      stats,
+      rowCount,
+    });
+  }
+  return out;
+}
+
+/** Build a function that classifies a single ScanRow into the closest
+ *  matching seed by L2 distance over log-stats. Returns null if there
+ *  aren't enough seed benchmarks established yet to classify reliably
+ *  (need at least 3 of 5 SoC seed cells populated). */
+async function buildSocSeedClassifier(): Promise<
+  ((r: ScanRow) => SeedBucket) | null
+> {
+  const rows = await prisma.kvkBenchmark.findMany({
+    where: { kvkId: "soc", seed: { in: ["Imperium", "A", "B", "C", "D"] } },
+  });
+  if (rows.length < 3) return null;
+
+  // Build seed-signature vectors — log-scaled p99 of (kp, dkp, t5, deaths)
+  const sig = (s: KvkBenchmarkStats) => [
+    Math.log10(Math.max(1, s.kp.p99)),
+    Math.log10(Math.max(1, s.dkp.p99)),
+    Math.log10(Math.max(1, s.t5.p99)),
+    Math.log10(Math.max(1, s.deaths.p99)),
+  ];
+  const seedSigs: { seed: SeedBucket; sig: number[] }[] = rows.map((r) => ({
+    seed: r.seed as SeedBucket,
+    sig: sig(r.stats as unknown as KvkBenchmarkStats),
+  }));
+
+  return (r: ScanRow) => {
+    const rowSig = [
+      Math.log10(Math.max(1, r.kp ?? 0)),
+      Math.log10(Math.max(1, r.dkp ?? 0)),
+      Math.log10(Math.max(1, r.t5 ?? 0)),
+      Math.log10(Math.max(1, r.deaths ?? 0)),
+    ];
+    let best: SeedBucket = "general";
+    let bestDist = Infinity;
+    for (const { seed, sig: s } of seedSigs) {
+      let d = 0;
+      for (let i = 0; i < 4; i++) d += (rowSig[i] - s[i]) ** 2;
+      if (d < bestDist) {
+        bestDist = d;
+        best = seed;
+      }
+    }
+    return best;
+  };
 }
 
 /** Sample-weighted average of percentiles across uploads. Each scan's
@@ -162,19 +324,25 @@ function blend(
   };
 }
 
-/** Rebuild the canonical KvkBenchmark for one kvkId by blending every
- *  BenchmarkUpload for that kvkId with the hardcoded prior. Idempotent —
- *  safe to re-run on every upload or as part of a cron. */
-export async function rebuildBenchmark(kvkId: KvkId): Promise<void> {
+/** Rebuild the canonical KvkBenchmark for one (kvkId, seed) cell by
+ *  blending every BenchmarkUpload tagged with that pair, with the
+ *  hardcoded prior. Idempotent — safe to re-run on every upload or as
+ *  part of a cron.
+ *
+ *  When seed != "general" but the cell has zero uploads, the row is
+ *  dropped so lookup falls back to general (or to KVK_PRIORS if even
+ *  general is empty). */
+export async function rebuildBenchmark(
+  kvkId: KvkId,
+  seed: SeedBucket = "general",
+): Promise<void> {
   const uploads = await prisma.benchmarkUpload.findMany({
-    where: { kvkId },
+    where: { kvkId, seed },
     select: { stats: true, rowCount: true },
   });
 
   if (uploads.length === 0) {
-    // No real data — drop the cached benchmark so lookup falls back to
-    // KVK_PRIORS. deleteMany is non-throwing.
-    await prisma.kvkBenchmark.deleteMany({ where: { kvkId } });
+    await prisma.kvkBenchmark.deleteMany({ where: { kvkId, seed } });
     return;
   }
 
@@ -188,12 +356,7 @@ export async function rebuildBenchmark(kvkId: KvkId): Promise<void> {
         const s = u.stats as unknown as KvkBenchmarkStats;
         return { weight: u.rowCount, anchors: s[k] };
       })
-      // Drop pathological zeros so they don't poison the blend.
       .filter((u) => u.anchors.p99 > 0);
-    // With PRIOR_WEIGHT=0, blend() would divide by zero when uploadAnchors
-    // is empty (e.g. all scans had this stat as 0 — pre-T5 era for t5 stat).
-    // Fall back to prior in that case so this single stat doesn't degrade
-    // the whole benchmark for the kvkId.
     blended[k] =
       uploadAnchors.length === 0 ? prior[k] : blend(prior[k], uploadAnchors);
   }
@@ -201,9 +364,10 @@ export async function rebuildBenchmark(kvkId: KvkId): Promise<void> {
   for (const u of uploads) totalSamples += u.rowCount;
 
   await prisma.kvkBenchmark.upsert({
-    where: { kvkId },
+    where: { kvkId_seed: { kvkId, seed } },
     create: {
       kvkId,
+      seed,
       stats: blended as unknown as object,
       sampleCount: totalSamples,
     },
@@ -214,22 +378,45 @@ export async function rebuildBenchmark(kvkId: KvkId): Promise<void> {
   });
 }
 
-/** Rebuild every kvkId. Used by the daily cron. */
+/** Rebuild every kvkId × seed cell. Used by the daily cron. */
 export async function rebuildAllBenchmarks(): Promise<void> {
   for (const k of KVK_IDS) {
-    await rebuildBenchmark(k);
+    if (k === "soc") {
+      // SoC has 6 cells: general (legacy / fallback) + 5 seeds.
+      for (const seed of SEED_BUCKETS) {
+        await rebuildBenchmark(k, seed);
+      }
+    } else {
+      // LK KvKs (kvk1-4) only have the general bucket.
+      await rebuildBenchmark(k, "general");
+    }
   }
 }
 
 /** Load all KvkBenchmark rows and return a lookup function suitable to
- *  pass to computeScore(). For kvkIds with no benchmark row (no scans
- *  uploaded yet) returns the hardcoded prior. Caller pattern: load once
- *  per request / batch, reuse across many computeScore() calls. */
+ *  pass to computeScore(). The lookup is seed-aware:
+ *
+ *    For LK KvKs (kvk1-4) the seed param is ignored — always returns
+ *    the general benchmark (or KVK_PRIORS fallback).
+ *
+ *    For "soc" the lookup checks `(soc, <seed>)` first, then falls back
+ *    to `(soc, general)` if that seed isn't established yet, then to
+ *    KVK_PRIORS.soc. This way an applicant detected as B-seed gets
+ *    B-seed scoring when available, and graceful fallback otherwise.
+ *
+ *  Caller pattern: load once per request / batch, reuse across many
+ *  computeScore() calls. */
 export async function loadBenchmarkLookup(): Promise<BenchmarkLookup> {
   const rows = await prisma.kvkBenchmark.findMany();
   const map = new Map<string, KvkBenchmarkStats>();
   for (const r of rows) {
-    map.set(r.kvkId, r.stats as unknown as KvkBenchmarkStats);
+    map.set(`${r.kvkId}|${r.seed}`, r.stats as unknown as KvkBenchmarkStats);
   }
-  return (kvkId: KvkId) => map.get(kvkId) ?? KVK_PRIORS[kvkId];
+  return (kvkId: KvkId, seed?: string) => {
+    if (kvkId === "soc" && seed && seed !== "general") {
+      const seedHit = map.get(`soc|${seed}`);
+      if (seedHit) return seedHit;
+    }
+    return map.get(`${kvkId}|general`) ?? KVK_PRIORS[kvkId];
+  };
 }

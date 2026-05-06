@@ -32,6 +32,7 @@ const baseLk = {
   prevKvkDeathsN: 600_000,
   prevKvkRank: null,
   prevKvkScanActiveCount: null,
+  detectedSeed: null,
   scoringProfile: "lost-kingdom" as const,
 };
 
@@ -52,6 +53,7 @@ const matumba = {
   prevKvkDeathsN: 600_000,
   prevKvkRank: null,
   prevKvkScanActiveCount: null,
+  detectedSeed: null,
   scoringProfile: "season-of-conquest" as const,
 };
 
@@ -73,6 +75,7 @@ const realKrakenLK = {
   prevKvkDeathsN: 8_000_000,
   prevKvkRank: null,
   prevKvkScanActiveCount: null,
+  detectedSeed: null,
   scoringProfile: "lost-kingdom" as const,
 };
 
@@ -97,6 +100,7 @@ const realKrakenSoC = {
   prevKvkDeathsN: 250_000_000,
   prevKvkRank: 5,
   prevKvkScanActiveCount: 2400,
+  detectedSeed: "Imperium" as const,
   scoringProfile: "season-of-conquest" as const,
 };
 

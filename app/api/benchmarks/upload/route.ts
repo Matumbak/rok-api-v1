@@ -5,8 +5,11 @@ import { withCors } from "@/lib/cors";
 import { parseDkpXlsx } from "@/lib/xlsx-parser";
 import {
   processScanForBenchmark,
+  processScanForSocBenchmark,
   rebuildBenchmark,
+  SEED_BUCKETS,
   type ScanRow,
+  type SeedBucket,
 } from "@/lib/benchmarks";
 import { KVK_IDS, type KvkId } from "@/lib/scoring";
 
@@ -32,7 +35,14 @@ const HEADER_ALIASES: Record<keyof ScanRow, string[]> = {
   kp: ["KP (T4+T5)", "KP", "Kill Points", "Killpoints"],
   acclaim: ["Acclaim", "Valor", "Honor"],
   dkp: ["DKP", "DKPScore", "Score"],
+  kd: ["KD", "Kingdom", "Kingdom ID", "Home Kingdom", "Home"],
 };
+
+/** Freshness window for KingdomSeed-based seed assignment. Scans older
+ *  than this can't trust today's heroscroll seed (kingdoms drift between
+ *  groups over months) — fall through to auto-classification mode if
+ *  scanDate is provided and beyond this window. */
+const SEED_FRESHNESS_DAYS = 180;
 
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
 
@@ -76,6 +86,12 @@ export async function POST(request: Request) {
     const fileField = fd.get("file");
     const kvkIdField = fd.get("kvkId");
     const notesField = fd.get("notes");
+    /// "YYYY-MM-DD" — when this scan was originally captured. Only used
+    /// for SoC scans: if the date is older than SEED_FRESHNESS_DAYS we
+    /// switch from KingdomSeed-based bucketing to auto-classification
+    /// (heroscroll seeds drift over months — old scans need stat-
+    /// signature inference instead of today's seed lookup).
+    const scanDateField = fd.get("scanDate");
 
     if (!fileField || !(fileField instanceof File)) {
       return withCors(
@@ -129,8 +145,6 @@ export async function POST(request: Request) {
 
     // Reduce to ScanRow shape via header-alias matching.
     const scanRows: ScanRow[] = parsed.rows.map((r) => {
-      // Native fields aren't in r.data — they're at the top level. The
-      // benchmark only needs numeric stats, all of which are non-native.
       const d = r.data;
       return {
         power: pickNumber(d, HEADER_ALIASES.power),
@@ -141,11 +155,85 @@ export async function POST(request: Request) {
         kp: pickNumber(d, HEADER_ALIASES.kp),
         acclaim: pickNumber(d, HEADER_ALIASES.acclaim),
         dkp: pickNumber(d, HEADER_ALIASES.dkp),
+        kd: pickNumber(d, HEADER_ALIASES.kd),
       };
     });
 
-    const { stats, rowCount } = processScanForBenchmark(scanRows);
+    // Scan date check — drives SoC seed-assignment mode.
+    let classifierMode: "kingdom_seed" | "auto_classify" = "kingdom_seed";
+    if (
+      kvkId === "soc" &&
+      typeof scanDateField === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(scanDateField)
+    ) {
+      const ageMs = Date.now() - new Date(scanDateField).getTime();
+      if (ageMs > SEED_FRESHNESS_DAYS * 86400 * 1000) {
+        classifierMode = "auto_classify";
+      }
+    }
 
+    if (kvkId === "soc") {
+      // Per-seed bucketing: split rows by home-kingdom seed, write
+      // multiple BenchmarkUpload rows (one per seed share that meets
+      // the minimum-rows threshold).
+      const shares = await processScanForSocBenchmark(scanRows, classifierMode);
+      if (shares.length === 0) {
+        return withCors(
+          request,
+          NextResponse.json(
+            {
+              error: "no_seed_buckets",
+              hint:
+                "After partitioning rows by home-kingdom seed, no bucket " +
+                "had >= 20 active fighters. Either the scan has no KD " +
+                "column, or kingdoms aren't yet imported into KingdomSeed.",
+            },
+            { status: 400 },
+          ),
+        );
+      }
+      const created: Array<{
+        seed: SeedBucket;
+        seedSource: string;
+        rowCount: number;
+        uploadId: string;
+      }> = [];
+      for (const sh of shares) {
+        const upload = await prisma.benchmarkUpload.create({
+          data: {
+            kvkId,
+            seed: sh.seed,
+            seedSource: sh.seedSource,
+            notes,
+            rowCount: sh.rowCount,
+            stats: sh.stats as unknown as object,
+          },
+        });
+        created.push({
+          seed: sh.seed,
+          seedSource: sh.seedSource,
+          rowCount: sh.rowCount,
+          uploadId: upload.id,
+        });
+      }
+      // Rebuild every seed bucket that received data.
+      for (const sh of shares) {
+        await rebuildBenchmark(kvkId, sh.seed);
+      }
+      return withCors(
+        request,
+        NextResponse.json({
+          ok: true,
+          kvkId,
+          mode: classifierMode,
+          shares: created,
+          totalRowsIngested: created.reduce((s, c) => s + c.rowCount, 0),
+        }),
+      );
+    }
+
+    // LK path — single bucket.
+    const { stats, rowCount } = processScanForBenchmark(scanRows);
     if (rowCount === 0) {
       return withCors(
         request,
@@ -160,18 +248,17 @@ export async function POST(request: Request) {
         ),
       );
     }
-
     const upload = await prisma.benchmarkUpload.create({
       data: {
         kvkId,
+        seed: "general",
+        seedSource: "general",
         notes,
         rowCount,
         stats: stats as unknown as object,
       },
     });
-
-    await rebuildBenchmark(kvkId);
-
+    await rebuildBenchmark(kvkId, "general");
     return withCors(
       request,
       NextResponse.json({
@@ -205,6 +292,8 @@ export async function GET(request: Request) {
     select: {
       id: true,
       kvkId: true,
+      seed: true,
+      seedSource: true,
       notes: true,
       rowCount: true,
       uploadedAt: true,
@@ -218,6 +307,7 @@ export async function GET(request: Request) {
       uploads,
       benchmarks: benchmarks.map((b) => ({
         kvkId: b.kvkId,
+        seed: b.seed,
         sampleCount: b.sampleCount,
         updatedAt: b.updatedAt,
       })),

@@ -105,6 +105,7 @@ export async function POST(request: Request) {
       prevKvkDeathsN: normalized.prevKvkDeathsN,
       prevKvkRank: data.prevKvkRank ?? null,
       prevKvkScanActiveCount: data.prevKvkScanActiveCount ?? null,
+      detectedSeed: data.detectedSeed ?? null,
       spendingTier: data.spendingTier as SpendingTier,
       scoringProfile: (data.scoringProfile as ScoringProfile) ?? null,
     });
@@ -174,6 +175,7 @@ export async function POST(request: Request) {
 
         prevKvkRank: data.prevKvkRank ?? null,
         prevKvkScanActiveCount: data.prevKvkScanActiveCount ?? null,
+      detectedSeed: data.detectedSeed ?? null,
 
         ocrAutofill:
           Object.keys(autofillNormalized).length > 0

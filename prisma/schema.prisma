@@ -188,6 +188,15 @@ model MigrationApplication {
   /// t5 > 100K). Denominator for the rank percentile.
   prevKvkScanActiveCount  Int?
 
+  /// Applicant's detected seed group (Imperium / A / B / C / D),
+  /// derived from their home kingdom_id at submit time via
+  /// KingdomSeed lookup. Used to score their SoC KvKs against the
+  /// matching `(soc, <seed>)` benchmark instead of a flat soc avg.
+  /// Null = couldn't determine (kingdom not in KingdomSeed table, or
+  /// applicant didn't attach a DKP scan). LK KvKs (kvk1-4) ignore
+  /// this field — pre-SoC seed splits aren't meaningful.
+  detectedSeed            String?
+
   /// What OCR / DKP-lookup auto-filled at submit time, per watched
   /// field. Used to compute drift flags in admin: if the applicant's
   /// final value diverges by >5% from what was auto-detected, an
@@ -333,15 +342,24 @@ model MigrationApplication {
 /// sample-weighted averaging.
 model KvkBenchmark {
   /// "kvk1" | "kvk2" | "kvk3" | "kvk4" | "soc"
-  kvkId       String   @id
+  kvkId       String
+  /// Seed group bucket. For kvk1-4 = "general" (no seed split — per
+  /// product decision: pre-SoC seeds barely matter). For soc:
+  /// "Imperium" | "A" | "B" | "C" | "D" — five separate benchmarks
+  /// because a SoC matchup mixes 12+ kingdoms across 2-3 seed groups,
+  /// and a "B-seed top-1%" deserves a different scoring frame than an
+  /// "Imperium top-1%".
+  seed        String   @default("general")
   /// JSON: per-stat percentiles. Shape:
   /// { power:{p50,p80,p95,p99}, kp:{...}, t5:{...}, deaths:{...},
   ///   acclaim:{...}, dkp:{...} }
   stats       Json
-  /// Total active-fighter samples summed across all uploads for this kvkId.
+  /// Total active-fighter samples summed across all uploads feeding
+  /// this (kvkId, seed) cell.
   sampleCount Int
   updatedAt   DateTime @updatedAt
 
+  @@id([kvkId, seed])
   @@map("kvk_benchmarks")
 }
 
@@ -394,13 +412,30 @@ model KingdomSeed {
 model BenchmarkUpload {
   id          String   @id @default(cuid())
   kvkId       String
+  /// "general" for kvk1-4 (no seed split). For soc, the seed bucket
+  /// this upload's stats belong to ("Imperium" | "A" | "B" | "C" |
+  /// "D"). One xlsx upload of a SoC scan with mixed kingdoms produces
+  /// MULTIPLE BenchmarkUpload rows — one per seed bucket whose row
+  /// share crosses a minimum size threshold. This keeps each bucket's
+  /// signal pure (Imperium row stats don't get averaged into D-seed
+  /// stats just because they appeared in the same xlsx).
+  seed        String   @default("general")
   /// Free-form, e.g. "kingdom 3801 KvK4 export, Apr 2026".
   notes       String?
+  /// Number of source rows that landed in this seed bucket. For LK
+  /// uploads = full xlsx active-fighter count. For SoC uploads = the
+  /// active fighters whose home kingdom mapped to THIS seed only.
   rowCount    Int
-  /// Same shape as KvkBenchmark.stats — but for THIS upload only.
+  /// Same shape as KvkBenchmark.stats — but for THIS upload's seed
+  /// bucket only.
   stats       Json
+  /// How the seed was determined. "kingdom_seed" = looked up via
+  /// KingdomSeed[KD] (recent scan). "auto_classify" = inferred from
+  /// stat signature against established seed benchmarks (old scan).
+  /// "general" = no seed (LK upload).
+  seedSource  String   @default("general")
   uploadedAt  DateTime @default(now())
 
-  @@index([kvkId, uploadedAt])
+  @@index([kvkId, seed, uploadedAt])
   @@map("benchmark_uploads")
 }

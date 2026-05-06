@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { withCors } from "@/lib/cors";
 import { parseDkpXlsx } from "@/lib/xlsx-parser";
+import { prisma } from "@/lib/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,11 +10,11 @@ export const maxDuration = 30;
 const MAX_FILE_BYTES = 4 * 1024 * 1024; // Vercel body limit
 const ACCEPTED_EXT = /\.(xlsx|xlsm|xls|csv|tsv)$/i;
 
-/** Norm + alias matching for the t5 / dkp columns we use to filter
- *  active fighters. */
+/** Norm + alias matching for the t5 / dkp / kd columns. */
 const ACTIVITY_COL_ALIASES = {
   t5: ["T5 Kills", "T5", "Tier 5 Kills"],
   dkp: ["DKP", "DKPScore", "Score"],
+  kd: ["KD", "Kingdom", "Kingdom ID", "Home Kingdom", "Home"],
 };
 
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
@@ -155,6 +156,26 @@ export async function POST(request: Request) {
       if (idx >= 0) rankAmongActive = idx + 1;
     }
 
+    // Detect applicant's home seed via KingdomSeed lookup. The row's KD
+    // column tells us their home kingdom_id; we cross-reference against
+    // the locally-imported HeroScrolls snapshot. Used by the form to
+    // ship `detectedSeed` along with the migration submit body, which
+    // SoC scoring uses to pick the seed-specific benchmark.
+    const kdCol = pickColumnLabel(result.columns, ACTIVITY_COL_ALIASES.kd);
+    let detectedSeed: string | null = null;
+    let homeKingdomId: number | null = null;
+    if (kdCol) {
+      const kdRaw = parseNumber(row.data[kdCol]);
+      if (kdRaw > 0) {
+        homeKingdomId = Math.trunc(kdRaw);
+        const ks = await prisma.kingdomSeed.findUnique({
+          where: { kingdomId: homeKingdomId },
+          select: { seed: true },
+        });
+        if (ks) detectedSeed = ks.seed;
+      }
+    }
+
     return withCors(
       request,
       NextResponse.json({
@@ -163,6 +184,8 @@ export async function POST(request: Request) {
         columns: result.columns,
         activeCount,
         rankAmongActive,
+        homeKingdomId,
+        detectedSeed,
       }),
     );
   } catch (err) {

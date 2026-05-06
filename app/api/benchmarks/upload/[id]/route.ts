@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { withCors } from "@/lib/cors";
-import { rebuildBenchmark } from "@/lib/benchmarks";
+import { rebuildBenchmark, type SeedBucket } from "@/lib/benchmarks";
 import { type KvkId } from "@/lib/scoring";
 
 export const runtime = "nodejs";
@@ -24,7 +24,7 @@ export async function DELETE(
   try {
     const existing = await prisma.benchmarkUpload.findUnique({
       where: { id },
-      select: { kvkId: true },
+      select: { kvkId: true, seed: true },
     });
     if (!existing) {
       return withCors(
@@ -33,7 +33,10 @@ export async function DELETE(
       );
     }
     await prisma.benchmarkUpload.delete({ where: { id } });
-    await rebuildBenchmark(existing.kvkId as KvkId);
+    await rebuildBenchmark(
+      existing.kvkId as KvkId,
+      existing.seed as SeedBucket,
+    );
     return withCors(request, NextResponse.json({ ok: true }));
   } catch (err) {
     return withCors(

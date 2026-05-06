@@ -52,6 +52,7 @@ async function main() {
     kp: num(r["KP (T4+T5)"]),
     acclaim: num(r["Acclaim"]),
     dkp: num(r["DKP"]),
+    kd: num(r["KD"]),
   }));
 
   console.log(`Parsed ${rows.length} rows from ${SOURCE_PATH}`);
@@ -80,7 +81,7 @@ async function main() {
 
   await rebuildBenchmark("kvk4");
   const benchmark = await prisma.kvkBenchmark.findUnique({
-    where: { kvkId: "kvk4" },
+    where: { kvkId_seed: { kvkId: "kvk4", seed: "general" } },
   });
   console.log(`\nRebuilt KvkBenchmark[kvk4]: sampleCount=${benchmark?.sampleCount}`);
 

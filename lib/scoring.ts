@@ -194,9 +194,19 @@ export const KVK_PRIORS: Record<KvkId, KvkBenchmarkStats> = {
 };
 
 /** KvK benchmark lookup signature. Returns merged (prior + uploaded scans)
- *  benchmark for a kvkId. lib/benchmarks.ts builds this from DB; falls
- *  back to KVK_PRIORS when no scans have been ingested. */
-export type BenchmarkLookup = (kvkId: KvkId) => KvkBenchmarkStats;
+ *  benchmark for a kvkId, optionally specialised by seed bucket.
+ *
+ *  For LK KvKs (kvk1-4) the seed param is ignored — there's only ever
+ *  one benchmark per LK kvkId (the "general" cell).
+ *
+ *  For SoC, passing the applicant's detected seed picks the matching
+ *  per-seed benchmark (B-seed applicant gets B-seed anchors). When no
+ *  seed is passed or that seed has no data yet, falls back to the
+ *  flat soc-general benchmark. */
+export type BenchmarkLookup = (
+  kvkId: KvkId,
+  seed?: string,
+) => KvkBenchmarkStats;
 
 /** From accountBornAt months, infer the list of KvKs the player has
  *  participated in. Order matches calendar progression — used both for
@@ -334,6 +344,11 @@ export interface ScoreInputs {
   /** Total active fighters in that scan. Denominator for the rank
    *  percentile. Null when no scan attached. */
   prevKvkScanActiveCount: number | null;
+  /** Applicant's detected seed group from KingdomSeed[homeKD] lookup
+   *  (Imperium / A / B / C / D). When present, SoC KvKs are scored
+   *  against the matching `(soc, <seed>)` benchmark. Null = LK-only
+   *  applicant or unknown seed; falls back to general soc benchmark. */
+  detectedSeed: string | null;
   spendingTier: SpendingTier | null;
   scoringProfile: ScoringProfile | null;
 }
@@ -388,7 +403,13 @@ export function computeScore(
   const profile = input.scoringProfile ?? inferProfile(input.accountBornAt);
   const months = ageMonthsFromDate(input.accountBornAt);
   const played = kvksPlayed(months);
-  const lookup = benchmarkLookup ?? ((k: KvkId) => KVK_PRIORS[k]);
+  const lookup =
+    benchmarkLookup ?? ((k: KvkId, _seed?: string) => KVK_PRIORS[k]);
+  // For SoC KvKs we want the seed-specific benchmark when applicant
+  // has a detected seed; LK KvKs ignore seed (only one benchmark per
+  // kvkId there).
+  const seedFor = (k: KvkId): string | undefined =>
+    k === "soc" && input.detectedSeed ? input.detectedSeed : undefined;
   const vip = Number.parseInt(input.vipLevel, 10);
 
   // Lifetime expected = sum of per-KvK medians across played history.
@@ -402,7 +423,7 @@ export function computeScore(
   // "max valor someone in this stage might have at peak".
   let valorRefP80 = 0;
   for (const k of played) {
-    const b = lookup(k);
+    const b = lookup(k, seedFor(k));
     expKp += b.kp.p50;
     expT5 += b.t5.p50;
     expDeaths += b.deaths.p50;
@@ -445,7 +466,7 @@ export function computeScore(
   // (current army size at end of that KvK is the most-comparable peer
   // group). For pre-KvK players, percentile in kvk1 prior.
   const latestKvk: KvkId = played.length > 0 ? played[played.length - 1] : "kvk1";
-  const latestBench = lookup(latestKvk);
+  const latestBench = lookup(latestKvk, seedFor(latestKvk));
   const powerScore = percentileScore(input.powerN, latestBench.power) * CAPS.power;
 
   // PrevKvkDkp: scored from TWO complementary signals when both present.
@@ -469,7 +490,10 @@ export function computeScore(
     | { rank: number; total: number; pct: number }
     | null = null;
   if (prevDkp != null && played.length > 0) {
-    const absoluteFrac = percentileScore(prevDkp, lookup(latestKvk).dkp);
+    const absoluteFrac = percentileScore(
+      prevDkp,
+      lookup(latestKvk, seedFor(latestKvk)).dkp,
+    );
     let positionFrac: number | null = null;
     if (
       input.prevKvkRank != null &&
@@ -605,6 +629,16 @@ export function computeScore(
   }
 
   if (input.spendingTier === "f2p" && score >= 60) tags.add("f2p-hero");
+
+  // Seed-aware tag for SoC applicants. Combines detected seed with the
+  // applicant's score band so officers see "this is a top D-seed
+  // fighter" or "mid Imperium fighter" at a glance.
+  if (input.detectedSeed && played.includes("soc")) {
+    const seedSlug = input.detectedSeed.toLowerCase();
+    const band =
+      score >= 85 ? "top" : score >= 65 ? "high" : score >= 40 ? "mid" : "low";
+    tags.add(`${seedSlug}-seed-${band}`);
+  }
 
   if (input.maxValorPointsN != null && input.maxValorPointsN >= 5_000_000) {
     tags.add("kvk-veteran");

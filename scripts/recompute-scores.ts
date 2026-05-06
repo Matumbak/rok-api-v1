@@ -35,6 +35,7 @@ async function main() {
       prevKvkDeathsN: true,
       prevKvkRank: true,
       prevKvkScanActiveCount: true,
+      detectedSeed: true,
       spendingTier: true,
       scoringProfile: true,
       overallScore: true,
@@ -63,6 +64,7 @@ async function main() {
       prevKvkDeathsN: app.prevKvkDeathsN,
       prevKvkRank: app.prevKvkRank ?? null,
       prevKvkScanActiveCount: app.prevKvkScanActiveCount ?? null,
+      detectedSeed: app.detectedSeed ?? null,
       spendingTier: app.spendingTier as SpendingTier | null,
       scoringProfile: app.scoringProfile as ScoringProfile | null,
     });

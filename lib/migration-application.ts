@@ -97,6 +97,16 @@ export const submitSchema = z.object({
   prevKvkRank: z.number().int().min(1).optional().nullable(),
   prevKvkScanActiveCount: z.number().int().min(1).optional().nullable(),
 
+  /// Applicant's detected seed group ("Imperium" / "A" / "B" / "C" /
+  /// "D"). Captured from /api/dkp/lookup via KingdomSeed[homeKD]
+  /// lookup. SoC scoring uses this to pick the matching seed-specific
+  /// benchmark. Null = applicant didn't attach a scan or their home
+  /// kingdom isn't in the imported KingdomSeed snapshot.
+  detectedSeed: z
+    .enum(["Imperium", "A", "B", "C", "D"])
+    .optional()
+    .nullable(),
+
   /// ISO calendar date "YYYY-MM-DD" extracted from the Scout commander's
   /// recruit date — the account's birth day. Server stores as DateTime
   /// at UTC midnight.
