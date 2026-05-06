@@ -368,8 +368,23 @@ export async function rebuildBenchmark(
         return { weight: u.rowCount, anchors: s[k] };
       })
       .filter((u) => u.anchors.p99 > 0);
-    blended[k] =
-      uploadAnchors.length === 0 ? prior[k] : blend(prior[k], uploadAnchors);
+    if (uploadAnchors.length === 0) {
+      // No upload had non-zero data for this stat. Two paths:
+      //   - acclaim: the mechanic was added partway through RoK's
+      //     lifecycle; pre-acclaim KvK scans (kvk1/2 typically) have
+      //     all zeros. If EVERY upload shows zero, the mechanic
+      //     genuinely wasn't tracked then. Persist 0 so scoring's
+      //     valor reference skips this KvK rather than falling back
+      //     to a fabricated prior.
+      //   - Other stats: hardcoded prior is the cleanest fallback
+      //     (T5 = 0 in lk-early f2p uploads is expected, prior covers).
+      blended[k] =
+        k === "acclaim"
+          ? { p50: 0, p80: 0, p95: 0, p99: 0 }
+          : prior[k];
+    } else {
+      blended[k] = blend(prior[k], uploadAnchors);
+    }
   }
 
   for (const u of uploads) totalSamples += u.rowCount;
