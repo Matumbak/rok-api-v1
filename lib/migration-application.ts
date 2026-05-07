@@ -37,7 +37,10 @@ export type ApplicationStatus = (typeof STATUSES)[number];
  * different formats ("84M", "84,200,000", "84.2M").
  */
 export const submitSchema = z.object({
-  governorId: z.string().min(1).max(20),
+  // RoK governor IDs are sequential — current ceiling is 9 digits as of
+  // 2026 and growing at ~21M/year, so 9 stays safe for years. We reject
+  // leading zeros and anything non-numeric to drop obvious spam early.
+  governorId: z.string().regex(/^[1-9]\d{0,8}$/, "invalid_governor_id"),
   nickname: z.string().min(1).max(60),
   currentKingdom: z.string().min(1).max(20),
   currentAlliance: z.string().max(40).optional().nullable(),
