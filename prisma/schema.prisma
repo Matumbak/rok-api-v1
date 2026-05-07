@@ -38,23 +38,6 @@ model MigrationRequirement {
   @@map("migration_requirements")
 }
 
-/// YouTube media items shown on the landing's Media page.
-/// `title` is auto-fetched from YouTube oEmbed when the URL is saved
-/// (admin can override it manually).
-model MediaItem {
-  id          String   @id @default(cuid())
-  url         String   @unique
-  title       String
-  thumbnail   String
-  videoId     String
-  order       Int      @default(0)
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@map("media_items")
-}
-
 /// A single DKP scan upload. Columns metadata + the rows it produced.
 /// Only one scan is "current" at a time — uploads atomically replace
 /// the entire collection.

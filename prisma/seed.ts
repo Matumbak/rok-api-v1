@@ -46,23 +46,6 @@ const REQUIREMENTS = [
   },
 ];
 
-const MEDIA = [
-  {
-    url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    title: "KvK 7 Finale — Last Stand at the Pass",
-    thumbnail: "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
-    videoId: "dQw4w9WgXcQ",
-    order: 0,
-  },
-  {
-    url: "https://www.youtube.com/watch?v=9bZkp7q19f0",
-    title: "Ark of Osiris — 4028 Coordinated Push",
-    thumbnail: "https://i.ytimg.com/vi/9bZkp7q19f0/hqdefault.jpg",
-    videoId: "9bZkp7q19f0",
-    order: 1,
-  },
-];
-
 async function main() {
   let stats = 0;
   for (const s of KINGDOM_STATS) {
@@ -86,19 +69,8 @@ async function main() {
     }
   }
 
-  let media = 0;
-  for (const m of MEDIA) {
-    const existing = await prisma.mediaItem.findUnique({
-      where: { url: m.url },
-    });
-    if (!existing) {
-      await prisma.mediaItem.create({ data: m });
-      media++;
-    }
-  }
-
   console.log(
-    `[seed] created (existing rows preserved): kingdomStats=${stats}, requirements=${requirements}, media=${media}`,
+    `[seed] created (existing rows preserved): kingdomStats=${stats}, requirements=${requirements}`,
   );
   console.log(
     "[seed] DKP standings are seeded by uploading an xlsx via the admin UI.",
