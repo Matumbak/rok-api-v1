@@ -365,6 +365,21 @@ model KingdomSeed {
   kingdomId           Int      @id
   /// "Imperium" | "A" | "B" | "C" | "D"
   seed                String
+  /// Within-seed tier classification: kingdoms ranked by `totalKillpoints`
+  /// inside their seed group, sliced 10% / 20% / 70% → "high" / "mid" /
+  /// "low". Used by the benchmark partition: a row from an A-high
+  /// kingdom goes into the (a-high) bucket regardless of where the
+  /// individual player ranks within their kingdom's roster.
+  ///
+  /// Null for Imperium kingdoms (single bucket — top-24 are uniformly
+  /// elite, no within-seed split needed) and for kingdoms whose seed
+  /// has < 10 ranked entries (rare; happens during a cold import
+  /// before heroscroll's tail fills out).
+  ///
+  /// Recomputed by lib/kingdom-tier.ts:classifyKingdomTiers(), called
+  /// at the end of the refresh-kingdom-seeds cron and exposed via
+  /// POST /api/benchmarks/reclassify-kingdoms for manual re-runs.
+  tier                String?
   /// Global rank from HeroScrolls (1 = strongest by composite rating).
   rank                Int
   /// Aggregate stats — sum across the kingdom's top 300 governors.
@@ -385,6 +400,7 @@ model KingdomSeed {
 
   @@index([seed])
   @@index([rank])
+  @@index([tier])
   @@map("kingdom_seeds")
 }
 

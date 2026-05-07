@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { withCors } from "@/lib/cors";
+import { classifyKingdomTiers } from "@/lib/kingdom-tier";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -131,6 +132,13 @@ export async function POST(request: Request) {
       prisma.kingdomSeed.createMany({ data }),
     ]);
 
+    // Tier classification right after the seed import — kingdoms get
+    // ranked within their seed by totalKillpoints and assigned high /
+    // mid / low. Imperium kingdoms get tier=null (single bucket). The
+    // benchmark partition reads KingdomSeed.tier on every scan upload,
+    // so doing this here keeps tiers in sync with the freshest seeds.
+    const tiers = await classifyKingdomTiers();
+
     return withCors(
       request,
       NextResponse.json({
@@ -138,6 +146,7 @@ export async function POST(request: Request) {
         ms: Date.now() - t0,
         rollups: rollups.length,
         scrapedTimestamp: rollups[0]?.timestamp ?? null,
+        tiers,
       }),
     );
   } catch (err) {

@@ -727,15 +727,23 @@ export const SCORING_BUCKETS = [
 ] as const;
 export type ScoringBucket = (typeof SCORING_BUCKETS)[number];
 
-/** Tier-first walk order used to assign the seed-band tag. Walking
- *  by tier means an applicant who matches d-high gets the d-high tag
- *  even if they ALSO match a-low — we tag by how they FIGHT (top 10%
- *  in their kingdom is more meaningful than which seed they live in). */
+/** Seed-first walk order used to assign the seed-band tag. Per user
+ *  intent: when an applicant matches BOTH a higher-seed/lower-tier
+ *  bucket (e.g. a-low) AND a lower-seed/higher-tier bucket (e.g.
+ *  d-high), the higher-seed bucket wins. Logic: a low-A fighter often
+ *  plays comparably to a high-D fighter, but the bigger-kingdom
+ *  context (A-seed) is the more informative tag — it tells officers
+ *  what environment the applicant came up in.
+ *
+ *  Order: imperium → A-{high,mid,low} → B-{high,mid,low} →
+ *  C-{high,mid,low} → D-{high,mid,low}. First bucket whose score
+ *  passes MID (≥50) becomes the applicant's tag. */
 const TAG_WALK_ORDER: ScoringBucket[] = [
   "imperium",
-  "a-high", "b-high", "c-high", "d-high",
-  "a-mid",  "b-mid",  "c-mid",  "d-mid",
-  "a-low",  "b-low",  "c-low",  "d-low",
+  "a-high", "a-mid", "a-low",
+  "b-high", "b-mid", "b-low",
+  "c-high", "c-mid", "c-low",
+  "d-high", "d-mid", "d-low",
 ];
 
 /** Convert a bucket key into a persistence-friendly tag slug. */

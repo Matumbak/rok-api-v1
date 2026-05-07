@@ -210,32 +210,34 @@ export function processScanForBenchmark(rows: ScanRow[]): {
   return rowsToStats(rows);
 }
 
-/** SoC path (v2) — partition rows by (home-kingdom seed × within-
- *  kingdom KP rank). Returns one aggregate per (seed × tier) bucket
- *  plus a `general` aggregate that includes every active row.
+/** SoC path (v2) — partition rows into (seed × tier) buckets using
+ *  the home kingdom's pre-computed tier from KingdomSeed.tier. The
+ *  tier classification itself is run separately by
+ *  lib/kingdom-tier.ts:classifyKingdomTiers (kingdoms ranked by
+ *  totalKillpoints within their seed group, sliced 10/20/70). At
+ *  upload time we just look up "what tier is this kingdom" and drop
+ *  the row into the matching bucket — no within-scan ranking needed.
  *
- *  Steps per scan:
- *    1. Group rows by `homeKingdomId` (resolved via KingdomSeed lookup
- *       for the seed; rows whose KD doesn't resolve fall into general
- *       only).
- *    2. For each kingdom group, sort by KP descending. Top 10% goes to
- *       {seed}-high, next 20% to {seed}-mid, bottom 70% to {seed}-low.
- *       Imperium kingdoms collapse to a single "imperium" bucket.
- *    3. Aggregate per bucket via rowsToStats.
+ *  Why kingdom-level tier (not within-kingdom-row rank): user's
+ *  intent is "the environment a player comes from" — a player from
+ *  an A-high kingdom benchmarks against A-high regardless of where
+ *  they personally rank in their kingdom's top-300 list. Strong
+ *  player from A-low still benchmarks against A-low; their score
+ *  comes out high precisely because they outperform their low-tier
+ *  peers.
  *
- *  Buckets with rowCount < MIN_SEED_BUCKET_ROWS are dropped (too noisy
- *  to publish). The general bucket has no min threshold — it's the
- *  fallback we always want populated.
+ *  Always emits a `general` aggregate over every active row alongside
+ *  the per-bucket shares — used as the tier-blind backstop.
  *
- *  classifierMode controls how seeds are determined for rows whose KD
- *  doesn't appear in KingdomSeed (e.g. very old scans, KDs that
- *  hadn't shipped at scrape time):
- *    "kingdom_seed"  → drop those rows (recent scans)
- *    "auto_classify" → infer seed from stat signature against
- *                      established benchmarks (best-effort backfill) */
+ *  Buckets with rowCount < MIN_SEED_BUCKET_ROWS are dropped (too
+ *  noisy to publish). Rows still live in BenchmarkUploadRow so a
+ *  future re-bucket can pick them up.
+ *
+ *  classifierMode is kept for backward compat with the old route
+ *  signature; v2 ignores it and always uses KingdomSeed.tier. */
 export async function processScanForSocBenchmark(
   rows: ScanRow[],
-  classifierMode: "kingdom_seed" | "auto_classify" = "kingdom_seed",
+  _classifierMode: "kingdom_seed" | "auto_classify" = "kingdom_seed",
 ): Promise<
   Array<{
     seed: SeedBucket;
@@ -243,95 +245,58 @@ export async function processScanForSocBenchmark(
     stats: KvkBenchmarkStats;
     rowCount: number;
     /** Rows that landed in this bucket. Caller persists them to
-     *  BenchmarkUploadRow so future re-bucketings (e.g. tweaked
-     *  cutoffs) don't require a re-upload. */
+     *  BenchmarkUploadRow so future re-bucketings (e.g. after a tier
+     *  reclassification) don't require a re-upload. */
     rows: ScanRow[];
   }>
 > {
-  // Pre-load KingdomSeed map once.
-  const seedMap = new Map<number, Seed>(
+  // Pre-load (kingdomId → seed × tier) map once. Imperium kingdoms
+  // have tier=null on purpose (single bucket, no within-tier split).
+  // Non-Imperium kingdoms with tier=null mean classification hasn't
+  // run yet — those rows fall through to `general` only so we don't
+  // pollute tier cells with unbinned data.
+  const seedMap = new Map<
+    number,
+    { seed: Seed; tier: Tier | null }
+  >(
     (await prisma.kingdomSeed.findMany({
-      select: { kingdomId: true, seed: true },
+      select: { kingdomId: true, seed: true, tier: true },
     }))
       .filter((k) =>
         ["Imperium", "A", "B", "C", "D"].includes(k.seed),
       )
-      .map((k) => [k.kingdomId, k.seed as Seed]),
+      .map((k) => [
+        k.kingdomId,
+        {
+          seed: k.seed as Seed,
+          tier: (k.tier as Tier | null) ?? null,
+        },
+      ]),
   );
 
-  // Auto-classify fallback for rows without a KingdomSeed entry. The
-  // classifier returns one of A/B/C/D/Imperium (legacy seed values),
-  // which we then feed into the same tier-ranking pipeline.
-  let classifyFn: ((r: ScanRow) => Seed) | null = null;
-  if (classifierMode === "auto_classify") {
-    classifyFn = await buildSocSeedClassifier();
-  }
-
-  /** Resolve a row's home seed. Returns null when neither path works
-   *  — those rows still go into the `general` aggregate but get no
-   *  (seed × tier) bucket. */
-  const resolveSeed = (r: ScanRow): Seed | null => {
-    if (r.kd != null && seedMap.has(r.kd)) return seedMap.get(r.kd)!;
-    if (classifyFn) return classifyFn(r);
-    return null;
-  };
-
-  // Group active rows by (homeKingdomId, seed). For seed-only fallback
-  // (kingdom not in KingdomSeed but classifier returned a seed) we use
-  // the kd value as the kingdom key to keep tier ranking honest. If kd
-  // is also missing, we have to skip tiering — treat all such rows as a
-  // single "unknown" group ranked together. That group still gets a
-  // tier assignment, just an imprecise one.
-  type KingdomGroup = {
-    seed: Seed;
-    rows: ScanRow[];
-  };
-  const groups = new Map<string, KingdomGroup>();
-  for (const r of rows) {
-    const seed = resolveSeed(r);
-    if (seed == null) continue;
-    const key = `${seed}:${r.kd ?? "unknown"}`;
-    let g = groups.get(key);
-    if (!g) {
-      g = { seed, rows: [] };
-      groups.set(key, g);
-    }
-    g.rows.push(r);
-  }
-
-  // Bucket rows into the v2 vocabulary by ranking each kingdom's roster
-  // by KP. Imperium is the exception — every row from an imperium
-  // kingdom drops directly into "imperium" with no tier split.
+  // Bucket each row by its home kingdom's (seed, tier).
   const partitions = new Map<SeedBucket, ScanRow[]>();
   for (const b of SEED_BUCKETS) partitions.set(b, []);
 
-  for (const { seed, rows: groupRows } of groups.values()) {
-    if (seed === "Imperium") {
-      partitions.get("imperium")!.push(...groupRows);
+  for (const r of rows) {
+    if (r.kd == null) continue;
+    const entry = seedMap.get(r.kd);
+    if (!entry) continue;
+    if (entry.seed === "Imperium") {
+      partitions.get("imperium")!.push(r);
       continue;
     }
-    // Sort descending by KP — null KP rows sink to the bottom (low).
-    const sorted = [...groupRows].sort((a, b) => {
-      const ak = a.kp ?? 0;
-      const bk = b.kp ?? 0;
-      return bk - ak;
-    });
-    const n = sorted.length;
-    const highEnd = Math.max(1, Math.round(n * TIER_CUTOFFS.high));
-    const midEnd = Math.max(
-      highEnd + 1,
-      Math.round(n * TIER_CUTOFFS.midUpper),
-    );
-    for (let i = 0; i < n; i++) {
-      const tier: Tier = i < highEnd ? "high" : i < midEnd ? "mid" : "low";
-      partitions.get(bucketFor(seed, tier))!.push(sorted[i]);
+    if (entry.tier == null) {
+      // Kingdom seed known but tier not classified — only contribute
+      // to general (skip below; the general loop catches it).
+      continue;
     }
+    partitions.get(bucketFor(entry.seed, entry.tier))!.push(r);
   }
 
-  // The `general` aggregate sees every active row regardless of seed —
-  // used as the tier-blind backstop. Note: `rowsToStats` already filters
-  // to active fighters (dkp > 0 OR t5 > 100k); we pass the raw row set
-  // and let it do that work.
+  // The `general` aggregate sees every active row regardless of
+  // seed/tier — used as the tier-blind backstop. `rowsToStats` filters
+  // to active fighters (dkp > 0 OR t5 > 100k) internally.
   partitions.get("general")!.push(...rows);
 
   const out: Array<{
@@ -354,12 +319,7 @@ export async function processScanForSocBenchmark(
     }
     out.push({
       seed: bucket,
-      seedSource:
-        bucket === "general"
-          ? "general"
-          : classifierMode === "auto_classify"
-            ? "auto_classify"
-            : "kingdom_seed_tier",
+      seedSource: bucket === "general" ? "general" : "kingdom_seed_tier",
       stats,
       rowCount,
       rows: rs,
