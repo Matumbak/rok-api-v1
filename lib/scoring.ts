@@ -714,20 +714,51 @@ function round2(n: number): number {
 export type Seed = "Imperium" | "A" | "B" | "C" | "D";
 export const SEEDS: Seed[] = ["Imperium", "A", "B", "C", "D"];
 
+/** v2 SoC bucket keys. Mirrors `SEED_BUCKETS` in lib/benchmarks.ts but
+ *  duplicated here to avoid pulling benchmarks → scoring imports
+ *  (scoring is meant to be pure). Keep in sync if the bucket vocab
+ *  changes in benchmarks.ts. */
+export const SCORING_BUCKETS = [
+  "imperium",
+  "a-high", "a-mid", "a-low",
+  "b-high", "b-mid", "b-low",
+  "c-high", "c-mid", "c-low",
+  "d-high", "d-mid", "d-low",
+] as const;
+export type ScoringBucket = (typeof SCORING_BUCKETS)[number];
+
+/** Tier-first walk order used to assign the seed-band tag. Walking
+ *  by tier means an applicant who matches d-high gets the d-high tag
+ *  even if they ALSO match a-low — we tag by how they FIGHT (top 10%
+ *  in their kingdom is more meaningful than which seed they live in). */
+const TAG_WALK_ORDER: ScoringBucket[] = [
+  "imperium",
+  "a-high", "b-high", "c-high", "d-high",
+  "a-mid",  "b-mid",  "c-mid",  "d-mid",
+  "a-low",  "b-low",  "c-low",  "d-low",
+];
+
+/** Convert a bucket key into a persistence-friendly tag slug. */
+function bucketToTag(bucket: ScoringBucket): string {
+  if (bucket === "imperium") return "imperium-seed";
+  // "a-high" → "a-seed-high"
+  const [seedLower, tier] = bucket.split("-");
+  return `${seedLower}-seed-${tier}`;
+}
+
 export interface ApplicantScoreOutput {
   /** Main, tier-blind score — uses (soc, general) benchmark for SoC
    *  KvKs regardless of applicant's detected seed. This is what gets
    *  persisted as `overallScore` and shown as the primary number in
    *  admin. */
   main: ScoreResult;
-  /** Per-seed scores: "if scored against <seed>-seed benchmark, X/100".
-   *  Null for applicants who haven't played any SoC season — there's
-   *  nothing seed-aware to compare. */
-  perSeedScores: Record<Seed, number> | null;
-  /** Final tags for persistence: main.tags + (optionally) the seed-
-   *  band tag derived from the applicant's home seed × their score in
-   *  that seed (e.g. "b-seed-high" = applicant from B-seed kingdom
-   *  who scored ≥65 when graded against the B-seed benchmark). */
+  /** Per-bucket scores against each v2 SoC bucket: "if scored against
+   *  <bucket> benchmark, X/100". Null for applicants who haven't
+   *  played SoC. Keys match SCORING_BUCKETS — 13 entries when present. */
+  perBucketScores: Record<ScoringBucket, number> | null;
+  /** Final tags for persistence: main.tags + the seed-tier band tag
+   *  ("imperium-seed", "a-seed-high", "b-seed-mid", etc.) derived
+   *  purely from how the applicant performs against the buckets. */
   tags: string[];
 }
 
@@ -735,9 +766,10 @@ export interface ApplicantScoreOutput {
  *  admin PATCH, cron, recompute scripts). Computes:
  *
  *    - main, tier-blind score (`detectedSeed` ignored for SoC math)
- *    - per-seed scores when applicant played SoC (5 separate runs)
- *    - composite tag list including the seed-band tag based on the
- *      applicant's home KD seed × their score in that seed
+ *    - per-bucket scores when applicant played SoC (13 separate runs
+ *      against the v2 buckets)
+ *    - composite tag list including the seed-tier band tag derived
+ *      from how applicant performs vs each bucket
  *
  *  Persisting flow: caller saves `output.main.score` as overallScore
  *  and `output.tags` (NOT main.tags) so the seed-band tag survives. */
@@ -752,52 +784,46 @@ export function computeApplicantScore(
   const months = ageMonthsFromDate(input.accountBornAt);
   const playedSoC = kvksPlayed(months).includes("soc");
 
-  let perSeedScores: Record<Seed, number> | null = null;
+  let perBucketScores: Record<ScoringBucket, number> | null = null;
   if (playedSoC) {
-    perSeedScores = {
-      Imperium: computeScore({ ...input, detectedSeed: "Imperium" }, benchmarkLookup).score,
-      A: computeScore({ ...input, detectedSeed: "A" }, benchmarkLookup).score,
-      B: computeScore({ ...input, detectedSeed: "B" }, benchmarkLookup).score,
-      C: computeScore({ ...input, detectedSeed: "C" }, benchmarkLookup).score,
-      D: computeScore({ ...input, detectedSeed: "D" }, benchmarkLookup).score,
-    };
+    // Run computeScore against each v2 bucket. We pass the bucket key
+    // as `detectedSeed` — that's what loadBenchmarkLookup uses to look
+    // up `(kvkId, bucket)`. Naming-wise the field is misleading now
+    // (it's a bucket key, not a seed), but renaming would touch a lot
+    // of call sites; keep the field name and treat it as opaque.
+    const partial: Record<string, number> = {};
+    for (const bucket of SCORING_BUCKETS) {
+      partial[bucket] = computeScore(
+        { ...input, detectedSeed: bucket },
+        benchmarkLookup,
+      ).score;
+    }
+    perBucketScores = partial as Record<ScoringBucket, number>;
   }
 
-  // Seed-level tag is derived purely from PERFORMANCE, not home kingdom.
-  // Walk seeds top-down (Imperium → A → B → C → D); the first seed where
-  // the applicant clears the "mid" threshold (score ≥ 50) is the tier
-  // they fight at. If applicant fights like mid-D but lives in a B-seed
-  // kingdom, we tag them "d-seed-mid" — what they DO matters, not where
-  // they currently sit.
-  //
-  // Non-Imperium seeds cap the band at "mid": exceeding mid in (say)
-  // A-seed means the applicant should be tested against Imperium next.
-  // Only Imperium has high/top bands (since there's no seed above it).
-  // If applicant doesn't reach mid even in D-seed, they're below
-  // active-fighter baseline → tag "d-seed-low".
+  // Seed-tier tag is derived purely from PERFORMANCE, not home
+  // kingdom. Walking the TAG_WALK_ORDER (tier-first descending),
+  // the first bucket where applicant scores ≥ MID becomes their tag.
+  // Examples:
+  //   - matches imperium with ≥50 → "imperium-seed"
+  //   - misses imperium but matches d-high → "d-seed-high"
+  //   - matches a-low only → "a-seed-low"
+  //   - matches nothing → "below-d" (worst-case label)
+  const MID = 50;
   let tags = main.tags;
-  if (perSeedScores) {
-    const order: Seed[] = ["Imperium", "A", "B", "C", "D"];
-    const MID = 50;
-    const HIGH = 65;
-    const TOP = 85;
+  if (perBucketScores) {
     let tagOut: string | null = null;
-    for (const seed of order) {
-      const s = perSeedScores[seed];
-      if (s < MID) continue;
-      if (seed === "Imperium") {
-        const band = s >= TOP ? "top" : s >= HIGH ? "high" : "mid";
-        tagOut = `imperium-seed-${band}`;
-      } else {
-        tagOut = `${seed.toLowerCase()}-seed-mid`;
+    for (const bucket of TAG_WALK_ORDER) {
+      if (perBucketScores[bucket] >= MID) {
+        tagOut = bucketToTag(bucket);
+        break;
       }
-      break;
     }
-    if (!tagOut) tagOut = "d-seed-low";
+    if (!tagOut) tagOut = "below-d";
     tags = [...main.tags, tagOut];
   }
 
-  return { main, perSeedScores, tags };
+  return { main, perBucketScores, tags };
 }
 
 export function percentileTag(pct: number | null | undefined): string | null {

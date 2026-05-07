@@ -290,10 +290,11 @@ async function enrichApplicationDetail(
     profileAutoInferred,
     effectiveCohort,
     playedKvks: recomputed.main.playedKvks,
-    /** Per-seed scoring scenarios. Null when applicant hasn't played
-     *  any SoC seasons. Lets admin see "if scored against X-seed
-     *  benchmark, applicant gets Y/100" for all 5 seeds. */
-    perSeedScores: recomputed.perSeedScores,
+    /** Per-bucket scoring scenarios (v2). Null when applicant hasn't
+     *  played any SoC seasons. 13 entries: imperium + (a/b/c/d) ×
+     *  (high/mid/low). "If scored against X bucket, applicant gets
+     *  Y/100" — drives the per-seed/tier breakdown UI. */
+    perBucketScores: recomputed.perBucketScores,
     /** Effective overall score (tier-blind main). Persisted in DB as
      *  overallScore on next PATCH; exposed here so admin always reads
      *  the canonical post-recompute number. */

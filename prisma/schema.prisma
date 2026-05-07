@@ -395,30 +395,73 @@ model KingdomSeed {
 model BenchmarkUpload {
   id          String   @id @default(cuid())
   kvkId       String
-  /// "general" for kvk1-4 (no seed split). For soc, the seed bucket
-  /// this upload's stats belong to ("Imperium" | "A" | "B" | "C" |
-  /// "D"). One xlsx upload of a SoC scan with mixed kingdoms produces
-  /// MULTIPLE BenchmarkUpload rows — one per seed bucket whose row
-  /// share crosses a minimum size threshold. This keeps each bucket's
-  /// signal pure (Imperium row stats don't get averaged into D-seed
-  /// stats just because they appeared in the same xlsx).
+  /// Bucket vocabulary lives in lib/benchmarks.ts. Two generations:
+  ///   v1 (legacy, aggregate-only): "Imperium" | "A" | "B" | "C" | "D"
+  ///        | "general". Created before raw rows were stored.
+  ///   v2 (current, paired with BenchmarkUploadRow rows):
+  ///        "imperium" | "a-high" | "a-mid" | "a-low"
+  ///                   | "b-high" | "b-mid" | "b-low"
+  ///                   | "c-high" | "c-mid" | "c-low"
+  ///                   | "d-high" | "d-mid" | "d-low"
+  ///                   | "general"
+  /// Tier suffix is set by ranking each row by KP within its home
+  /// kingdom: top 10% → high, next 20% → mid, bottom 70% → low.
+  /// Imperium (top-24 kingdoms) is a single bucket — no within-tier
+  /// split needed since the whole roster sits at high tier already.
   seed        String   @default("general")
   /// Free-form, e.g. "kingdom 3801 KvK4 export, Apr 2026".
   notes       String?
   /// Number of source rows that landed in this seed bucket. For LK
-  /// uploads = full xlsx active-fighter count. For SoC uploads = the
-  /// active fighters whose home kingdom mapped to THIS seed only.
+  /// uploads = full xlsx active-fighter count. For SoC v2 uploads = the
+  /// active fighters whose (home kingdom × tier) maps to THIS bucket.
   rowCount    Int
   /// Same shape as KvkBenchmark.stats — but for THIS upload's seed
   /// bucket only.
   stats       Json
-  /// How the seed was determined. "kingdom_seed" = looked up via
-  /// KingdomSeed[KD] (recent scan). "auto_classify" = inferred from
-  /// stat signature against established seed benchmarks (old scan).
-  /// "general" = no seed (LK upload).
+  /// How the seed was determined.
+  ///   "kingdom_seed"      → v1, looked up via KingdomSeed[KD]
+  ///   "auto_classify"     → v1, inferred from stat signature
+  ///   "general"           → no seed split (LK upload)
+  ///   "kingdom_seed_tier" → v2, kingdom seed × within-kingdom KP rank
+  ///   "legacy_aggregate"  → v1 row that the v2 rebuild should ignore
+  ///                          because the new partition needs raw rows
   seedSource  String   @default("general")
   uploadedAt  DateTime @default(now())
 
+  rows        BenchmarkUploadRow[]
+
   @@index([kvkId, seed, uploadedAt])
   @@map("benchmark_uploads")
+}
+
+/// Per-row scan data for v2 BenchmarkUpload entries. Stored so the
+/// (seed × tier) partition can be re-derived later without asking
+/// the user to re-upload — e.g. if the high/mid/low cutoffs change
+/// from 10/20/70 to 15/30/55, we just rebuild from these rows.
+///
+/// v1 uploads don't have rows attached (predates this table).
+model BenchmarkUploadRow {
+  id            String   @id @default(cuid())
+  uploadId      String
+  /// Source kingdom_id from the row's KD column. Drives the seed
+  /// lookup against KingdomSeed at ingest time. Null when the scan
+  /// row had no KD (rare; usually means an old export format).
+  kd            Int?
+  governorId    String?
+  /// Stats normalised to integers (BigInt for headroom — KP can
+  /// exceed 2^31). Null when the source column was missing/empty.
+  power         BigInt?
+  startPower    BigInt?
+  kp            BigInt?
+  t4            BigInt?
+  t5            BigInt?
+  deaths        BigInt?
+  acclaim       BigInt?
+  dkp           BigInt?
+
+  upload BenchmarkUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  @@index([uploadId])
+  @@index([kd])
+  @@map("benchmark_upload_rows")
 }

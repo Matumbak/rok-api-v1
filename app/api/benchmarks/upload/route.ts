@@ -26,7 +26,7 @@ const ACCEPTED_EXT = /\.(xlsx|xlsm|xls|csv|tsv)$/i;
 /** Header aliases we accept on the DKP-scan xlsx. Flexible because
  *  exports from different community tools name columns slightly
  *  differently (riseofstats / rokboard / private spreadsheets). */
-const HEADER_ALIASES: Record<keyof ScanRow, string[]> = {
+const HEADER_ALIASES = {
   power: ["Current Power", "Power", "Cur Power"],
   startPower: ["Start Power", "Starting Power"],
   t4: ["T4 Kills", "T4", "Tier 4 Kills"],
@@ -36,7 +36,8 @@ const HEADER_ALIASES: Record<keyof ScanRow, string[]> = {
   acclaim: ["Acclaim", "Valor", "Honor"],
   dkp: ["DKP", "DKPScore", "Score"],
   kd: ["KD", "Kingdom", "Kingdom ID", "Home Kingdom", "Home"],
-};
+  governorId: ["Governor ID", "GovernorID", "ID", "Player ID", "Lord ID"],
+} as const;
 
 /** Freshness window for KingdomSeed-based seed assignment. Scans older
  *  than this can't trust today's heroscroll seed (kingdoms drift between
@@ -48,7 +49,7 @@ const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
 
 function pickNumber(
   data: Record<string, string | number | null>,
-  candidates: string[],
+  candidates: readonly string[],
 ): number | null {
   const wanted = new Set(candidates.map(norm));
   for (const [key, val] of Object.entries(data)) {
@@ -57,6 +58,27 @@ function pickNumber(
       if (typeof val === "string") {
         const n = Number.parseFloat(val.replace(/[\s,]/g, ""));
         if (Number.isFinite(n)) return n;
+      }
+    }
+  }
+  return null;
+}
+
+/** Like pickNumber but for IDs that we want to keep as a string —
+ *  governor IDs are display values, not arithmetic, so leave them as
+ *  the source's string form (drops loss-of-precision risk on 9-digit
+ *  numerics). */
+function pickStringId(
+  data: Record<string, string | number | null>,
+  candidates: readonly string[],
+): string | null {
+  const wanted = new Set(candidates.map(norm));
+  for (const [key, val] of Object.entries(data)) {
+    if (wanted.has(norm(key))) {
+      if (val == null) continue;
+      const s = String(val).trim();
+      if (s.length > 0 && /^\d+$/.test(s.replace(/\.0$/, ""))) {
+        return s.replace(/\.0$/, "");
       }
     }
   }
@@ -156,6 +178,7 @@ export async function POST(request: Request) {
         acclaim: pickNumber(d, HEADER_ALIASES.acclaim),
         dkp: pickNumber(d, HEADER_ALIASES.dkp),
         kd: pickNumber(d, HEADER_ALIASES.kd),
+        governorId: pickStringId(d, HEADER_ALIASES.governorId),
       };
     });
 
@@ -209,6 +232,33 @@ export async function POST(request: Request) {
             stats: sh.stats as unknown as object,
           },
         });
+        // Persist raw rows alongside the aggregate. Lets a future
+        // re-bucketing (e.g. tweaked tier cutoffs, different seed
+        // partition logic) work off the original data without asking
+        // the user to re-upload the scan. createMany is bulk so a
+        // 300-row upload is one round-trip.
+        if (sh.rows.length > 0) {
+          await prisma.benchmarkUploadRow.createMany({
+            data: sh.rows.map((r) => ({
+              uploadId: upload.id,
+              kd: r.kd,
+              governorId: r.governorId ?? null,
+              power: r.power != null ? BigInt(Math.round(r.power)) : null,
+              startPower:
+                r.startPower != null
+                  ? BigInt(Math.round(r.startPower))
+                  : null,
+              kp: r.kp != null ? BigInt(Math.round(r.kp)) : null,
+              t4: r.t4 != null ? BigInt(Math.round(r.t4)) : null,
+              t5: r.t5 != null ? BigInt(Math.round(r.t5)) : null,
+              deaths:
+                r.deaths != null ? BigInt(Math.round(r.deaths)) : null,
+              acclaim:
+                r.acclaim != null ? BigInt(Math.round(r.acclaim)) : null,
+              dkp: r.dkp != null ? BigInt(Math.round(r.dkp)) : null,
+            })),
+          });
+        }
         created.push({
           seed: sh.seed,
           seedSource: sh.seedSource,
@@ -258,6 +308,34 @@ export async function POST(request: Request) {
         stats: stats as unknown as object,
       },
     });
+    // Persist raw rows for LK uploads too. Same audit / future-proofing
+    // motivation as the SoC path — if we change kvk1-4 logic later we
+    // can rebuild without asking for re-upload. Only persist active
+    // fighters (the same filter rowsToStats applies internally).
+    const activeRows = scanRows.filter((r) => {
+      const dkp = r.dkp ?? 0;
+      const t5 = r.t5 ?? 0;
+      return dkp > 0 || t5 > 100_000;
+    });
+    if (activeRows.length > 0) {
+      await prisma.benchmarkUploadRow.createMany({
+        data: activeRows.map((r) => ({
+          uploadId: upload.id,
+          kd: r.kd,
+          governorId: r.governorId ?? null,
+          power: r.power != null ? BigInt(Math.round(r.power)) : null,
+          startPower:
+            r.startPower != null ? BigInt(Math.round(r.startPower)) : null,
+          kp: r.kp != null ? BigInt(Math.round(r.kp)) : null,
+          t4: r.t4 != null ? BigInt(Math.round(r.t4)) : null,
+          t5: r.t5 != null ? BigInt(Math.round(r.t5)) : null,
+          deaths: r.deaths != null ? BigInt(Math.round(r.deaths)) : null,
+          acclaim:
+            r.acclaim != null ? BigInt(Math.round(r.acclaim)) : null,
+          dkp: r.dkp != null ? BigInt(Math.round(r.dkp)) : null,
+        })),
+      });
+    }
     await rebuildBenchmark(kvkId, "general");
     return withCors(
       request,

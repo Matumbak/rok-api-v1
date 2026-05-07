@@ -32,22 +32,76 @@ import {
  *  (no seed split — pre-SoC seeds aren't meaningful enough to bother).
  *  SoC scans get partitioned by the source kingdom's seed, computed
  *  from KingdomSeed lookups against the row-level KD column. */
+/** v2 bucket vocabulary. Replaces the v1 seed-only split (Imperium /
+ *  A / B / C / D / general) with a 2-D partition: home-kingdom seed
+ *  × within-kingdom KP rank. Imperium stays as a single bucket — the
+ *  whole roster of a top-24 kingdom already counts as elite, so an
+ *  internal high/mid/low split adds noise without meaning.
+ *
+ *  Tier suffix is assigned per row at ingest time:
+ *    high → top 10% by KP within the row's home kingdom
+ *    mid  → next 20% (10–30%)
+ *    low  → bottom 70% (30–100%)
+ *
+ *  `general` stays alongside as a tier- and seed-blind aggregate
+ *  used by the main (un-tiered) score and as a fallback when an
+ *  applicant's specific bucket has too little data.
+ *
+ *  v1 buckets ("Imperium", "A"/"B"/"C"/"D", "general") still exist
+ *  in the BenchmarkUpload table from past uploads — those rows carry
+ *  `seedSource = "kingdom_seed"` or "auto_classify" and are skipped
+ *  during v2 rebuilds (they don't have raw rows attached, so they
+ *  can't be re-bucketed). They're left in place for audit. */
 export type SeedBucket =
   | "general"
-  | "Imperium"
-  | "A"
-  | "B"
-  | "C"
-  | "D";
+  | "imperium"
+  | "a-high" | "a-mid" | "a-low"
+  | "b-high" | "b-mid" | "b-low"
+  | "c-high" | "c-mid" | "c-low"
+  | "d-high" | "d-mid" | "d-low";
 
 export const SEED_BUCKETS: SeedBucket[] = [
   "general",
+  "imperium",
+  "a-high", "a-mid", "a-low",
+  "b-high", "b-mid", "b-low",
+  "c-high", "c-mid", "c-low",
+  "d-high", "d-mid", "d-low",
+];
+
+/** Cutoffs for the within-kingdom KP rank → tier mapping.
+ *  Top fraction → high; next fraction → mid; rest → low.
+ *  E.g. on a 300-row top-300 export: 30/60/210 split.
+ *
+ *  Tweaking these later is cheap because raw rows are persisted to
+ *  BenchmarkUploadRow — `rebuildBenchmark` re-derives the (seed,tier)
+ *  splits from rows on every run, so changing these constants and
+ *  re-running the rebuild gives a new partition without re-uploading. */
+const TIER_CUTOFFS = {
+  high: 0.10,         // top 10% by KP
+  midUpper: 0.30,     // next 20% (10–30%)
+  // remaining 30–100% is "low"
+} as const;
+
+/** Two cohorts of v1 seed values still found in legacy uploads. Kept
+ *  here so we can recognise + skip them when rebuilding. */
+const LEGACY_V1_BUCKETS = new Set([
   "Imperium",
   "A",
   "B",
   "C",
   "D",
-];
+]);
+
+type Seed = "Imperium" | "A" | "B" | "C" | "D";
+type Tier = "high" | "mid" | "low";
+
+/** Compose a v2 bucket key from a seed + tier. Imperium folds into a
+ *  single bucket regardless of tier. */
+function bucketFor(seed: Seed, tier: Tier): SeedBucket {
+  if (seed === "Imperium") return "imperium";
+  return `${seed.toLowerCase()}-${tier}` as SeedBucket;
+}
 
 /** Min rows per seed bucket before a SoC scan upload contributes to that
  *  bucket's benchmark. Tiny shares (n=3 from a single AoC seed) would
@@ -91,6 +145,9 @@ export interface ScanRow {
   /** Source kingdom_id from the row's KD column. Used during SoC
    *  ingestion to look up the row's home seed. */
   kd: number | null;
+  /** Optional — when present, the row's governorId. Persisted alongside
+   *  numeric stats so future re-bucketings have audit / traceability. */
+  governorId?: string | null;
 }
 
 /** Compute the per-stat percentile distribution for a set of rows.
@@ -153,87 +210,159 @@ export function processScanForBenchmark(rows: ScanRow[]): {
   return rowsToStats(rows);
 }
 
-/** SoC path — partition rows by their home-kingdom seed (looked up from
- *  KingdomSeed via the KD column). Returns one aggregate per seed bucket
- *  whose row count meets MIN_SEED_BUCKET_ROWS. Buckets with too few rows
- *  fall through to "general" (still aggregated, won't update seed-
- *  specific benchmarks).
+/** SoC path (v2) — partition rows by (home-kingdom seed × within-
+ *  kingdom KP rank). Returns one aggregate per (seed × tier) bucket
+ *  plus a `general` aggregate that includes every active row.
  *
- *  classifierMode controls how seeds are determined for rows where the
- *  KD-based lookup misses (kingdom not in KingdomSeed):
- *    "kingdom_seed" → drop the row (Phase 1 / recent scans)
- *    "auto_classify" → infer seed from row's stat signature (Phase 2,
- *                     used when scan is older than the freshness window) */
+ *  Steps per scan:
+ *    1. Group rows by `homeKingdomId` (resolved via KingdomSeed lookup
+ *       for the seed; rows whose KD doesn't resolve fall into general
+ *       only).
+ *    2. For each kingdom group, sort by KP descending. Top 10% goes to
+ *       {seed}-high, next 20% to {seed}-mid, bottom 70% to {seed}-low.
+ *       Imperium kingdoms collapse to a single "imperium" bucket.
+ *    3. Aggregate per bucket via rowsToStats.
+ *
+ *  Buckets with rowCount < MIN_SEED_BUCKET_ROWS are dropped (too noisy
+ *  to publish). The general bucket has no min threshold — it's the
+ *  fallback we always want populated.
+ *
+ *  classifierMode controls how seeds are determined for rows whose KD
+ *  doesn't appear in KingdomSeed (e.g. very old scans, KDs that
+ *  hadn't shipped at scrape time):
+ *    "kingdom_seed"  → drop those rows (recent scans)
+ *    "auto_classify" → infer seed from stat signature against
+ *                      established benchmarks (best-effort backfill) */
 export async function processScanForSocBenchmark(
   rows: ScanRow[],
   classifierMode: "kingdom_seed" | "auto_classify" = "kingdom_seed",
 ): Promise<
   Array<{
     seed: SeedBucket;
-    seedSource: "kingdom_seed" | "auto_classify" | "general";
+    seedSource: "kingdom_seed_tier" | "auto_classify" | "general";
     stats: KvkBenchmarkStats;
     rowCount: number;
+    /** Rows that landed in this bucket. Caller persists them to
+     *  BenchmarkUploadRow so future re-bucketings (e.g. tweaked
+     *  cutoffs) don't require a re-upload. */
+    rows: ScanRow[];
   }>
 > {
   // Pre-load KingdomSeed map once.
-  const seedMap = new Map<number, string>(
+  const seedMap = new Map<number, Seed>(
     (await prisma.kingdomSeed.findMany({
       select: { kingdomId: true, seed: true },
-    })).map((k) => [k.kingdomId, k.seed]),
+    }))
+      .filter((k) =>
+        ["Imperium", "A", "B", "C", "D"].includes(k.seed),
+      )
+      .map((k) => [k.kingdomId, k.seed as Seed]),
   );
 
-  const partitions = new Map<SeedBucket, ScanRow[]>();
-  for (const seed of SEED_BUCKETS) partitions.set(seed, []);
-
-  // Phase 2 stub — auto-classification engine. Computes a row's seed
-  // from its stat signature against established seed benchmarks. Only
-  // kicks in when classifierMode === "auto_classify" AND we already
-  // have soc seed benchmarks loaded. Falls back to "general" otherwise.
-  let classifyFn: ((r: ScanRow) => SeedBucket) | null = null;
+  // Auto-classify fallback for rows without a KingdomSeed entry. The
+  // classifier returns one of A/B/C/D/Imperium (legacy seed values),
+  // which we then feed into the same tier-ranking pipeline.
+  let classifyFn: ((r: ScanRow) => Seed) | null = null;
   if (classifierMode === "auto_classify") {
     classifyFn = await buildSocSeedClassifier();
   }
 
+  /** Resolve a row's home seed. Returns null when neither path works
+   *  — those rows still go into the `general` aggregate but get no
+   *  (seed × tier) bucket. */
+  const resolveSeed = (r: ScanRow): Seed | null => {
+    if (r.kd != null && seedMap.has(r.kd)) return seedMap.get(r.kd)!;
+    if (classifyFn) return classifyFn(r);
+    return null;
+  };
+
+  // Group active rows by (homeKingdomId, seed). For seed-only fallback
+  // (kingdom not in KingdomSeed but classifier returned a seed) we use
+  // the kd value as the kingdom key to keep tier ranking honest. If kd
+  // is also missing, we have to skip tiering — treat all such rows as a
+  // single "unknown" group ranked together. That group still gets a
+  // tier assignment, just an imprecise one.
+  type KingdomGroup = {
+    seed: Seed;
+    rows: ScanRow[];
+  };
+  const groups = new Map<string, KingdomGroup>();
   for (const r of rows) {
-    let seed: SeedBucket | null = null;
-    if (r.kd != null && seedMap.has(r.kd)) {
-      const homeSeed = seedMap.get(r.kd)!;
-      if ((SEED_BUCKETS as string[]).includes(homeSeed)) {
-        seed = homeSeed as SeedBucket;
-      }
+    const seed = resolveSeed(r);
+    if (seed == null) continue;
+    const key = `${seed}:${r.kd ?? "unknown"}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = { seed, rows: [] };
+      groups.set(key, g);
     }
-    if (seed == null && classifyFn != null) {
-      seed = classifyFn(r);
-    }
-    if (seed == null) seed = "general";
-    partitions.get(seed)!.push(r);
+    g.rows.push(r);
   }
+
+  // Bucket rows into the v2 vocabulary by ranking each kingdom's roster
+  // by KP. Imperium is the exception — every row from an imperium
+  // kingdom drops directly into "imperium" with no tier split.
+  const partitions = new Map<SeedBucket, ScanRow[]>();
+  for (const b of SEED_BUCKETS) partitions.set(b, []);
+
+  for (const { seed, rows: groupRows } of groups.values()) {
+    if (seed === "Imperium") {
+      partitions.get("imperium")!.push(...groupRows);
+      continue;
+    }
+    // Sort descending by KP — null KP rows sink to the bottom (low).
+    const sorted = [...groupRows].sort((a, b) => {
+      const ak = a.kp ?? 0;
+      const bk = b.kp ?? 0;
+      return bk - ak;
+    });
+    const n = sorted.length;
+    const highEnd = Math.max(1, Math.round(n * TIER_CUTOFFS.high));
+    const midEnd = Math.max(
+      highEnd + 1,
+      Math.round(n * TIER_CUTOFFS.midUpper),
+    );
+    for (let i = 0; i < n; i++) {
+      const tier: Tier = i < highEnd ? "high" : i < midEnd ? "mid" : "low";
+      partitions.get(bucketFor(seed, tier))!.push(sorted[i]);
+    }
+  }
+
+  // The `general` aggregate sees every active row regardless of seed —
+  // used as the tier-blind backstop. Note: `rowsToStats` already filters
+  // to active fighters (dkp > 0 OR t5 > 100k); we pass the raw row set
+  // and let it do that work.
+  partitions.get("general")!.push(...rows);
 
   const out: Array<{
     seed: SeedBucket;
-    seedSource: "kingdom_seed" | "auto_classify" | "general";
+    seedSource: "kingdom_seed_tier" | "auto_classify" | "general";
     stats: KvkBenchmarkStats;
     rowCount: number;
+    rows: ScanRow[];
   }> = [];
-  for (const seed of SEED_BUCKETS) {
-    const rs = partitions.get(seed)!;
+
+  for (const bucket of SEED_BUCKETS) {
+    const rs = partitions.get(bucket)!;
     const { stats, rowCount } = rowsToStats(rs);
     if (rowCount === 0) continue;
-    if (seed !== "general" && rowCount < MIN_SEED_BUCKET_ROWS) {
-      // Tiny seed bucket — skip. Don't roll into general either to keep
-      // the seed signal clean.
+    if (bucket !== "general" && rowCount < MIN_SEED_BUCKET_ROWS) {
+      // Bucket too thin — skip publishing. Rows still live in
+      // BenchmarkUploadRow so a future rebuild with merged uploads can
+      // pick them up.
       continue;
     }
     out.push({
-      seed,
+      seed: bucket,
       seedSource:
-        seed === "general"
+        bucket === "general"
           ? "general"
           : classifierMode === "auto_classify"
             ? "auto_classify"
-            : "kingdom_seed",
+            : "kingdom_seed_tier",
       stats,
       rowCount,
+      rows: rs,
     });
   }
   return out;
@@ -241,25 +370,54 @@ export async function processScanForSocBenchmark(
 
 /** Build a function that classifies a single ScanRow into the closest
  *  matching seed by L2 distance over log-stats. Returns null if there
- *  aren't enough seed benchmarks established yet to classify reliably
- *  (need at least 3 of 5 SoC seed cells populated). */
+ *  aren't enough seed benchmarks established yet to classify reliably.
+ *
+ *  Reads seed signatures from EITHER the v1 single-seed cells
+ *  (Imperium/A/B/C/D — legacy) OR the v2 high-tier cells (imperium/
+ *  a-high/b-high/c-high/d-high — current). Whichever has data first
+ *  wins. The high-tier cells are a sensible signature anchor because
+ *  they capture the most-distinctive end of each seed's distribution. */
 async function buildSocSeedClassifier(): Promise<
-  ((r: ScanRow) => SeedBucket) | null
+  ((r: ScanRow) => Seed) | null
 > {
-  const rows = await prisma.kvkBenchmark.findMany({
-    where: { kvkId: "soc", seed: { in: ["Imperium", "A", "B", "C", "D"] } },
+  // Try v2 high-tier cells first.
+  const v2Rows = await prisma.kvkBenchmark.findMany({
+    where: {
+      kvkId: "soc",
+      seed: { in: ["imperium", "a-high", "b-high", "c-high", "d-high"] },
+    },
   });
-  if (rows.length < 3) return null;
+  // Fall back to v1 cells if v2 rebuild hasn't run yet.
+  const v1Rows =
+    v2Rows.length >= 3
+      ? []
+      : await prisma.kvkBenchmark.findMany({
+          where: {
+            kvkId: "soc",
+            seed: { in: Array.from(LEGACY_V1_BUCKETS) },
+          },
+        });
 
-  // Build seed-signature vectors — log-scaled p99 of (kp, dkp, t5, deaths)
+  const source = v2Rows.length >= 3 ? v2Rows : v1Rows;
+  if (source.length < 3) return null;
+
+  // Build seed-signature vectors — log-scaled p99 of (kp, dkp, t5,
+  // deaths). Seed key normalised to v1 vocab for downstream use.
   const sig = (s: KvkBenchmarkStats) => [
     Math.log10(Math.max(1, s.kp.p99)),
     Math.log10(Math.max(1, s.dkp.p99)),
     Math.log10(Math.max(1, s.t5.p99)),
     Math.log10(Math.max(1, s.deaths.p99)),
   ];
-  const seedSigs: { seed: SeedBucket; sig: number[] }[] = rows.map((r) => ({
-    seed: r.seed as SeedBucket,
+  const v2ToV1: Record<string, Seed> = {
+    imperium: "Imperium",
+    "a-high": "A",
+    "b-high": "B",
+    "c-high": "C",
+    "d-high": "D",
+  };
+  const seedSigs: { seed: Seed; sig: number[] }[] = source.map((r) => ({
+    seed: (v2ToV1[r.seed] ?? (r.seed as Seed)) as Seed,
     sig: sig(r.stats as unknown as KvkBenchmarkStats),
   }));
 
@@ -270,7 +428,7 @@ async function buildSocSeedClassifier(): Promise<
       Math.log10(Math.max(1, r.t5 ?? 0)),
       Math.log10(Math.max(1, r.deaths ?? 0)),
     ];
-    let best: SeedBucket = "general";
+    let best: Seed = "D";
     let bestDist = Infinity;
     for (const { seed, sig: s } of seedSigs) {
       let d = 0;
@@ -336,19 +494,29 @@ export async function rebuildBenchmark(
   kvkId: KvkId,
   seed: SeedBucket = "general",
 ): Promise<void> {
-  // Special-case soc:general — it represents the tier-blind average
-  // active SoC fighter across all seeds. Aggregate ALL soc uploads,
-  // not just the (rare) seed=general ones, so the main tier-blind
-  // score has a meaningful population baseline. For per-seed cells
-  // (soc:Imperium / A / B / C / D) we keep the strict filter.
+  // Source-aware filter: skip v1 legacy aggregates so they don't
+  // pollute the new (seed × tier) blends. v1 rows are the ones tagged
+  // with old seed values (Imperium / A / B / C / D) AND no rows[]
+  // attached — flagged via seedSource. Once the user re-uploads, only
+  // v2 entries (seedSource = "kingdom_seed_tier" | "general" | "auto_classify")
+  // contribute.
+  const liveSeedSources = [
+    "kingdom_seed_tier",
+    "general",
+    "auto_classify",
+  ];
   const uploads =
     kvkId === "soc" && seed === "general"
       ? await prisma.benchmarkUpload.findMany({
-          where: { kvkId },
+          where: { kvkId, seedSource: { in: liveSeedSources } },
           select: { stats: true, rowCount: true },
         })
       : await prisma.benchmarkUpload.findMany({
-          where: { kvkId, seed },
+          where: {
+            kvkId,
+            seed,
+            seedSource: { in: liveSeedSources },
+          },
           select: { stats: true, rowCount: true },
         });
 
@@ -403,7 +571,7 @@ export async function rebuildBenchmark(
 export async function rebuildAllBenchmarks(): Promise<void> {
   for (const k of KVK_IDS) {
     if (k === "soc") {
-      // SoC has 6 cells: general (legacy / fallback) + 5 seeds.
+      // SoC v2 has 14 cells: general + imperium + (a/b/c/d) × (high/mid/low).
       for (const seed of SEED_BUCKETS) {
         await rebuildBenchmark(k, seed);
       }
@@ -412,6 +580,18 @@ export async function rebuildAllBenchmarks(): Promise<void> {
       await rebuildBenchmark(k, "general");
     }
   }
+
+  // Sweep stale v1 cells. After the v2 rebuild the only KvkBenchmark
+  // rows we care about are the ones in SEED_BUCKETS; anything else
+  // (legacy "Imperium" / "A" / etc.) was deleted by rebuildBenchmark
+  // when it ran for that bucket. But if someone changed SEED_BUCKETS
+  // and didn't run rebuild for the dropped value, an obsolete row
+  // could linger — so we also do an explicit cleanup of soc cells
+  // that aren't in the active vocab.
+  const known = new Set<string>(SEED_BUCKETS);
+  await prisma.kvkBenchmark.deleteMany({
+    where: { kvkId: "soc", seed: { notIn: Array.from(known) } },
+  });
 }
 
 /** Load all KvkBenchmark rows and return a lookup function suitable to
