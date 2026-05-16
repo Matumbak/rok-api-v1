@@ -31,4 +31,7 @@ export function withCors(request: Request, res: NextResponse): NextResponse {
 }
 
 export const ALLOWED_HEADERS = "Authorization, Content-Type";
-export const ALLOWED_METHODS = "GET, POST, PATCH, DELETE, OPTIONS";
+// PUT was added for the page-content upsert endpoint. Keep this list in
+// sync with whatever verbs any admin route actually exports — anything
+// not listed here gets rejected at preflight.
+export const ALLOWED_METHODS = "GET, POST, PUT, PATCH, DELETE, OPTIONS";

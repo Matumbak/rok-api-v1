@@ -10,8 +10,18 @@ import {
  * CORS for /api/*:
  *   - preflight (OPTIONS) → respond 204 with allow headers
  *   - everything else → forward + decorate response with allow headers
+ *
+ * NOTE: Next.js requires this file to live at the project root as
+ * `middleware.ts` (or `src/middleware.ts`) AND export a function named
+ * `middleware`. Previously this file was named `proxy.ts` with an
+ * export named `proxy`, which Next.js silently ignored — so no
+ * preflight handler ran in production, and every cross-origin admin
+ * mutation (PATCH/POST/DELETE/PUT) failed at the browser preflight
+ * step. The handlers' `withCors()` decorations only set headers on
+ * actual responses; they can't satisfy the preflight that the browser
+ * sends before the actual request.
  */
-export function proxy(request: NextRequest) {
+export function middleware(request: NextRequest) {
   const origin = resolveOrigin(request);
 
   // preflight
