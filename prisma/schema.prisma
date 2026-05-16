@@ -8,6 +8,32 @@ datasource db {
 }
 
 /// Kingdom stat cards shown above the requirements on the Migration page.
+/// Per-locale text overrides for the public landing's translation tree.
+/// One row = one (locale, dotted-key) override of a string in the static
+/// translations.ts dictionary on rok-landing.
+///
+/// Why an override table instead of replacing translations.ts: the static
+/// dict stays the source of truth for new strings + structural keys; the
+/// admin only overrides the user-visible content fields (titles, slogans,
+/// hero copy, etc.) catalogued in rok-admin/lib/page-content-catalog.ts.
+/// Anything NOT overridden falls through to the static defaults, so
+/// shipping a new key never requires an admin DB write to be visible.
+model PageContent {
+  id        String   @id @default(cuid())
+  /// "en" / "ru" — the landing's supported locales.
+  locale    String
+  /// Dotted i18n key, e.g. "hero.title", "pages.dkp.eyebrow".
+  key       String
+  value     String
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@unique([locale, key])
+  @@index([locale])
+  @@map("page_content")
+}
+
+/// Kingdom stat cards shown above the requirements on the Migration page.
 /// `value` is free-text (e.g. "84.2B", "1,240", "12.6T") so the admin can
 /// format it any way they like. `iconKey` is a lucide-react icon name.
 model KingdomStat {
